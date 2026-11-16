@@ -161,6 +161,17 @@ function checkChain(state: ReviewState, items: CheckItem[]): void {
     if (pass.outcome.kind !== "recorded") continue;
     const record = pass.outcome.record;
     const writing = isWriting(record);
+    if (pass.resolveError) {
+      items.push({
+        severity: "fail",
+        rule: "sha-chain",
+        pass: pass.id,
+        comment: pass.outcome.commentUrl,
+        message: pass.resolveError,
+      });
+      if (writing) previous = { pass: pass.id, output: record.output_sha };
+      continue;
+    }
     if (writing && previous && !sameSha(record.input_sha, previous.output)) {
       items.push({
         severity: "fail",

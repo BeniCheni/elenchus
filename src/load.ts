@@ -198,7 +198,7 @@ function listedUnreadable(events: UnreadableEvent[], passes: PassState[]): Unrea
 }
 
 function passState(pass: { id: string; role: string; seat: string }, attempts: Attempt[]): PassState {
-  const base = { id: pass.id, role: pass.role, seat: pass.seat, outputIsAncestor: null, range: null };
+  const base = { id: pass.id, role: pass.role, seat: pass.seat, outputIsAncestor: null, range: null, resolveError: null };
   const valid = attempts.filter((attempt) => attempt.valid && attempt.record);
   const chosen = valid[valid.length - 1];
   if (chosen?.record) {
@@ -236,6 +236,13 @@ function isBefore(attempt: Attempt, other: Attempt): boolean {
   return attempt.createdAt < other.createdAt || (attempt.createdAt === other.createdAt && attempt.id < other.id);
 }
 
+class UnresolvedSha extends Error {
+  constructor(readonly spec: string) {
+    super(`cannot resolve ${spec}`);
+    this.name = "UnresolvedSha";
+  }
+}
+
 async function attachGit(
   gh: GhClient,
   repo: string,
@@ -248,9 +255,15 @@ async function attachGit(
     const key = `${base}...${tip}`;
     const hit = cache.get(key);
     if (hit) return hit;
-    const value = (await gh.get(`/repos/${repo}/compare/${base}...${tip}`)) as GhCompare;
-    cache.set(key, value);
-    return value;
+    try {
+      const value = (await gh.get(`/repos/${repo}/compare/${base}...${tip}`)) as GhCompare;
+      cache.set(key, value);
+      return value;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Not Found") || message.includes("No common ancestor")) throw new UnresolvedSha(key);
+      throw error;
+    }
   };
   const isAncestorOrEqual = async (ancestor: string, descendant: string): Promise<boolean> => {
     if (sameSha(ancestor, descendant)) return true;
@@ -265,9 +278,14 @@ async function attachGit(
       continue;
     }
     const record = pass.outcome.record;
-    const outputIsAncestor = await isAncestorOrEqual(record.output_sha, head);
-    const range = await seatRange(record, baseSha, compare, isAncestorOrEqual);
-    next.push({ ...pass, outputIsAncestor, range });
+    try {
+      const outputIsAncestor = await isAncestorOrEqual(record.output_sha, head);
+      const range = await seatRange(record, baseSha, compare, isAncestorOrEqual);
+      next.push({ ...pass, outputIsAncestor, range });
+    } catch (error) {
+      if (!(error instanceof UnresolvedSha)) throw error;
+      next.push({ ...pass, outputIsAncestor: null, range: null, resolveError: error.message });
+    }
   }
 
   const firstGap = next.find((pass) => pass.outcome.kind !== "recorded");
@@ -278,8 +296,15 @@ async function attachGit(
     if (previous?.outcome.kind === "recorded") {
       const output = previous.outcome.record.output_sha;
       if (!sameSha(output, head)) {
-        const result = await compare(output, head);
-        if (result.status === "ahead") inProgressPass = firstGap.id;
+        try {
+          const result = await compare(output, head);
+          if (result.status === "ahead") inProgressPass = firstGap.id;
+        } catch (error) {
+          if (!(error instanceof UnresolvedSha)) throw error;
+          const at = next.indexOf(previous);
+          const current = next[at];
+          if (current && !current.resolveError) next[at] = { ...current, resolveError: error.message };
+        }
       }
     }
   }

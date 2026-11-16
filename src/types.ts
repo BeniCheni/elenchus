@@ -134,6 +134,7 @@ export type PassState = {
   outcome: PassOutcome;
   outputIsAncestor: boolean | null;
   range: { commits: RangeCommit[]; error: string | null } | null;
+  resolveError: string | null;
 };
 
 export type Orphan = {

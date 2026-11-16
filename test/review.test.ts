@@ -407,3 +407,36 @@ describe("record authors", () => {
     expect(check).toContain(`FAIL posted_by pass 0 ${url(1)} posted_by mallory is not BeniCheni`);
   });
 });
+
+describe("unresolvable SHAs", () => {
+  async function unresolved(message: string) {
+    const comments = [comment(1, fenced(seat({ pass: "0", input_sha: A, output_sha: "09324fc" })), "2026-11-14T00:00:01Z")];
+    const inner = graphGh({ head: A, baseSha: A, comments, nodes });
+    const state = await loadReview(
+      {
+        async get(path, options) {
+          if (path.includes("/compare/")) throw new Error(message);
+          return inner.get(path, options);
+        },
+      },
+      "BeniCheni/elenchus",
+      1,
+      kickoffConfig(),
+    );
+    return { status: formatStatus(buildStatus(state)), check: formatCheck(buildCheck(state)) };
+  }
+
+  it("reports a mistyped SHA and still prints every pass", async () => {
+    const { status, check } = await unresolved("gh: Not Found (HTTP 404)");
+    expect(status).toContain("pass 0: recorded");
+    expect(status).toContain("pass exec: not recorded");
+    expect(check).toMatch(/FAIL sha-chain pass 0 .* cannot resolve /);
+  });
+
+  it("reports an unrelated history and still prints every pass", async () => {
+    const { status, check } = await unresolved("No common ancestor");
+    expect(status).toContain("pass 0: recorded");
+    expect(status).toContain("pass 1: not recorded");
+    expect(check).toMatch(/FAIL sha-chain pass 0 .* cannot resolve /);
+  });
+});
