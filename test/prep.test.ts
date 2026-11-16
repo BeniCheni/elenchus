@@ -186,11 +186,39 @@ describe("prep refusals", () => {
       prep({ head: made.second, url: made.url, root, pass: "0", runtime: "cursor", model: "grok-4.7-low", effort: "low" }),
     ).rejects.toThrow(/cursor may not hold a read-only seat \(S7\)/);
     await expect(
-      prep({ head: made.second, url: made.url, root, model: "no-such-model" }),
+      prep({
+        head: made.second,
+        url: made.url,
+        root,
+        model: "no-such-model",
+        records: [seat("0", made.second)],
+      }),
     ).rejects.toThrow(/model no-such-model is not in the claude table/);
     await expect(
-      prep({ head: made.second, url: made.url, root, effort: "no-such-effort" }),
+      prep({
+        head: made.second,
+        url: made.url,
+        root,
+        effort: "no-such-effort",
+        records: [seat("0", made.second)],
+      }),
     ).rejects.toThrow(/effort no-such-effort is not in the claude table/);
+    await expect(
+      prepareSeat({
+        gh: client(made.second, [seat("0", made.second)]),
+        repo: "BeniCheni/elenchus",
+        pr: 3,
+        pass: "1",
+        runtime: "",
+        model: "",
+        effort: "",
+        confirmedBy: "",
+        root,
+        config: config(),
+        cloneUrl: made.url,
+        run: runner(),
+      }),
+    ).rejects.toThrow(/prep requires --runtime, --model, --effort and --confirmed-by/);
     await expect(prep({ head: made.second, url: made.url, root, pass: "3" })).rejects.toThrow(/pass 3 has no seat/);
   });
 

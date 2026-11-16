@@ -100,19 +100,16 @@ async function main(argv: string[]): Promise<void> {
   const gh = recordDir ? recordingGh(cliGh(), recordDir) : cliGh();
   if (command === "prep") {
     if (flags.positional.length !== 2) usage();
-    if (!flags.runtime || !flags.model || !flags.effort || !flags.confirmedBy) {
-      throw new Error("prep requires --runtime, --model, --effort and --confirmed-by");
-    }
     const target = parseTarget(flags.positional[0] ?? "", flags.repoFlag);
     const report = await prepareSeat({
       gh,
       repo: target.repo,
       pr: target.pr,
       pass: flags.positional[1] ?? "",
-      runtime: flags.runtime,
-      model: flags.model,
-      effort: flags.effort,
-      confirmedBy: flags.confirmedBy,
+      runtime: flags.runtime ?? "",
+      model: flags.model ?? "",
+      effort: flags.effort ?? "",
+      confirmedBy: flags.confirmedBy ?? "",
       ...(flags.root ? { root: flags.root } : {}),
       ...(flags.config ? { config: flags.config } : {}),
     });

@@ -57,20 +57,6 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   if (!pass) throw new Error(`pass ${request.pass} is not in the configuration`);
   const seatKind = passSeatKind(state, request.pass);
   if (seatKind === "none") throw new Error(`pass ${request.pass} has no seat`);
-  const vendorName = vendorNameOf(request.runtime);
-  const vendor = state.config.vendors[vendorName];
-  if (!vendor) throw new Error(`runtime ${request.runtime} is not a configured vendor`);
-  if (!vendor.models[request.model]) throw new Error(`model ${request.model} is not in the ${request.runtime} table`);
-  if (!vendor.efforts[request.effort]) throw new Error(`effort ${request.effort} is not in the ${request.runtime} table`);
-  if (vendorName === "cursor") {
-    const suffix = request.model.slice(request.model.lastIndexOf("-") + 1);
-    if (suffix !== request.effort) {
-      throw new Error(`cursor effort is the model id suffix (S4): ${request.model} is not ${request.effort}`);
-    }
-  }
-  if (seatKind === "read-only" && vendor.read_only_seat !== true) {
-    throw new Error(`${request.runtime} may not hold a read-only seat (S7)`);
-  }
 
   const open = await openSeats(root, state, run);
   const gap = firstUnstarted(state, request.pass, new Set(open.map((seat) => seat.pass)));
@@ -85,6 +71,24 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   }
   if (gap) lines.push(`no valid record for pass ${gap}`);
   if (lines.length > 0) throw new Error(lines.join("\n"));
+
+  if (!request.runtime || !request.model || !request.effort || !request.confirmedBy) {
+    throw new Error("prep requires --runtime, --model, --effort and --confirmed-by");
+  }
+  const vendorName = vendorNameOf(request.runtime);
+  const vendor = state.config.vendors[vendorName];
+  if (!vendor) throw new Error(`runtime ${request.runtime} is not a configured vendor`);
+  if (!vendor.models[request.model]) throw new Error(`model ${request.model} is not in the ${request.runtime} table`);
+  if (!vendor.efforts[request.effort]) throw new Error(`effort ${request.effort} is not in the ${request.runtime} table`);
+  if (vendorName === "cursor") {
+    const suffix = request.model.slice(request.model.lastIndexOf("-") + 1);
+    if (suffix !== request.effort) {
+      throw new Error(`cursor effort is the model id suffix (S4): ${request.model} is not ${request.effort}`);
+    }
+  }
+  if (seatKind === "read-only" && vendor.read_only_seat !== true) {
+    throw new Error(`${request.runtime} may not hold a read-only seat (S7)`);
+  }
 
   const expected = previousOutput(state, request.pass);
   if (!sameSha(state.head, expected)) {
