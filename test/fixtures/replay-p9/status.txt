@@ -10,6 +10,7 @@ pass 2: recorded, rebuttal, seat builder, output 09324fb, comment https://github
 pass 2.5: recorded, synthesis, seat PM, output 09324fb, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925497719
 pass 3: recorded, adjudication, seat Beni, output 09324fb, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925503434
 pass exec: recorded, executor, seat executor, output dcb914e, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925540982
+head equals last output_sha dcb914e
 
 next: authorize
 blocked: Sprint 3 builds authorize

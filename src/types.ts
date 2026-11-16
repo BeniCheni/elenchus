@@ -179,6 +179,8 @@ export type StatusView = {
     blocked: string;
     options: string[] | null;
   };
+  /** Set once every pass is recorded: whether the head equals the last output_sha. */
+  headNote: string | null;
   unreadable: Unreadable[];
 };
 

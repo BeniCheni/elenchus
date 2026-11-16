@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { commentBody, replayRecords } from "../examples/replay/records.js";
-import { formatCheck } from "../src/format.js";
+import { formatCheck, formatStatus } from "../src/format.js";
 import { loadReview } from "../src/load.js";
 import { extractRecord } from "../src/records.js";
-import { buildCheck } from "../src/report.js";
+import { buildCheck, buildStatus } from "../src/report.js";
 import { validateSeatRecord } from "../src/schema.js";
 import type { SeatRecord } from "../src/types.js";
 import { comment, graphGh, kickoffConfig, type Node } from "./graph.js";
@@ -117,5 +117,31 @@ describe("transcribed #320 records", () => {
       full["34d078b"],
     );
     expect(restored).not.toMatch(/FAIL finding-carry/);
+  });
+
+  it("reports one commit on top of dcb914e without failing check", async () => {
+    const child = "a".repeat(40);
+    const comments = replayRecords.map((entry, index) =>
+      comment(
+        index + 1,
+        `${entry.firstLine}\n\n\`\`\`json\n${JSON.stringify(entry.record, null, 2)}\n\`\`\`\n`,
+        `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`,
+      ),
+    );
+    const state = await loadReview(
+      graphGh({
+        head: child,
+        baseSha: full["34d078b"],
+        comments,
+        nodes: { ...nodes, [child]: node([full.dcb914e], cursor) },
+      }),
+      "BeniCheni/elenchus",
+      1,
+      kickoffConfig(),
+    );
+    const status = formatStatus(buildStatus(state));
+    const check = formatCheck(buildCheck(state));
+    expect(status).toContain(`head ${child} does not equal last output_sha dcb914e`);
+    expect(check).not.toMatch(/FAIL /);
   });
 });

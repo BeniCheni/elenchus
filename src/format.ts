@@ -24,6 +24,7 @@ export function formatStatus(view: StatusView): string {
   for (const item of view.unreadable) {
     lines.push(`unreadable pass: ${item.commentUrl} ${item.reason}`);
   }
+  if (view.headNote) lines.push(view.headNote);
   lines.push("");
   lines.push(`next: ${view.next.step}`);
   if (view.next.seat) lines.push(`seat: ${view.next.seat}`);

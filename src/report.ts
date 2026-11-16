@@ -28,8 +28,18 @@ export function buildStatus(state: ReviewState): StatusView {
       reason: pass.outcome.kind === "rejected" ? pass.outcome.reason : null,
     })),
     next: nextStep(state, firstOpen),
+    headNote: headNote(state),
     unreadable: state.unreadable,
   };
+}
+
+function headNote(state: ReviewState): string | null {
+  if (state.passes.some((pass) => pass.outcome.kind !== "recorded")) return null;
+  const last = state.passes[state.passes.length - 1];
+  if (!last || last.outcome.kind !== "recorded") return null;
+  const output = last.outcome.record.output_sha;
+  if (sameSha(state.head, output)) return `head equals last output_sha ${output}`;
+  return `head ${state.head} does not equal last output_sha ${output}`;
 }
 
 function passStateName(pass: PassState, inProgressPass: string | null): StatusView["passes"][number]["state"] {
