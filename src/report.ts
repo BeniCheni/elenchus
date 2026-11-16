@@ -122,6 +122,14 @@ export function buildCheck(state: ReviewState): CheckItem[] {
   checkFindings(state, items);
   checkRoutes(state, items);
   checkRetries(state, items);
+  for (const notice of state.notices) {
+    items.push({
+      severity: "notice",
+      rule: notice.rule,
+      comment: notice.commentUrl,
+      message: notice.message,
+    });
+  }
   return items;
 }
 

@@ -142,6 +142,7 @@ export type ReviewState = {
   config: Config;
   passes: PassState[];
   orphans: Orphan[];
+  notices: Notice[];
   inProgressPass: string | null;
 };
 
@@ -170,8 +171,14 @@ export type StatusView = {
   };
 };
 
+export type Notice = {
+  rule: string;
+  commentUrl: string;
+  message: string;
+};
+
 export type CheckItem = {
-  severity: "fail" | "unverified";
+  severity: "fail" | "unverified" | "notice";
   rule: string;
   pass?: string;
   finding?: string;

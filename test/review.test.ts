@@ -3,6 +3,7 @@ import { formatCheck, formatStatus } from "../src/format.js";
 import { loadReview } from "../src/load.js";
 import { buildCheck, buildStatus } from "../src/report.js";
 import type { SeatRecord } from "../src/types.js";
+import { extractRecord } from "../src/records.js";
 import { comment, fenced, graphGh, kickoffConfig } from "./graph.js";
 
 const CLAUDE = "Claude <noreply@anthropic.com>";
@@ -219,6 +220,56 @@ describe("status and check", () => {
         effort: { requested: "xhigh", observed: "Extra High", source: "test" },
       })), "2026-11-14T00:00:02Z"),
     ], C, B);
+    expect(check).not.toMatch(/FAIL /);
+  });
+});
+
+describe("record extraction", () => {
+  const url = "https://github.com/BeniCheni/elenchus/pull/1#issuecomment-";
+
+  it("reads the last json block when an earlier one is only an excerpt", async () => {
+    const record = seat({ pass: "0" });
+    const body = `An excerpt.\n\n\`\`\`json\n{"note":true}\n\`\`\`\n\n\`\`\`json\n${JSON.stringify(record, null, 2)}\n\`\`\`\n`;
+    expect(extractRecord(body)).toBe(JSON.stringify(record, null, 2));
+    const { status, check } = await review([comment(1, body, "2026-11-14T00:00:01Z")]);
+    expect(status).toContain("pass 0: recorded");
+    expect(check).toContain(`NOTICE extraction ${url}1 json fence was not read as a record`);
+    expect(check).not.toMatch(/FAIL /);
+  });
+
+  it("does not read a json block that is followed by another kind of fence", async () => {
+    const body = "```json\n{\"pass\":\"0\"}\n```\n\n```text\nstill talking\n```\n";
+    expect(extractRecord(body)).toBeNull();
+    const { status, check } = await review([comment(2, body, "2026-11-14T00:00:01Z")]);
+    expect(status).toContain("blocked: no record for pass 0");
+    expect(status).not.toContain("rejected");
+    expect(check).toContain(`NOTICE extraction ${url}2 json fence was not read as a record`);
+    expect(check).not.toMatch(/FAIL /);
+  });
+
+  it("accepts a record written with CRLF line endings", async () => {
+    const record = seat({ pass: "0" });
+    const body = `\`\`\`json\r\n${JSON.stringify(record, null, 2)}\r\n\`\`\`\r\n`;
+    expect(extractRecord(body)).toBe(JSON.stringify(record, null, 2));
+    const { status, check } = await review([comment(3, body, "2026-11-14T00:00:01Z")]);
+    expect(status).toContain("pass 0: recorded");
+    expect(check).not.toMatch(/NOTICE /);
+    expect(check).not.toMatch(/FAIL /);
+  });
+
+  it.each([
+    ["an upper-case tag", "```JSON\n{\"pass\":\"0\"}\n```\n"],
+    ["a space after the backticks", "``` json\n{\"pass\":\"0\"}\n```\n"],
+    ["four backticks", "````json\n{\"pass\":\"0\"}\n````\n"],
+    ["an indented fence", "    ```json\n{\"pass\":\"0\"}\n    ```\n"],
+    ["a quoted fence", "> ```json\n> {\"pass\":\"0\"}\n> ```\n"],
+  ])("prints one notice for %s and does not change the result", async (label, body) => {
+    expect(extractRecord(body), label).toBeNull();
+    const { status, check } = await review([comment(4, body, "2026-11-14T00:00:01Z")]);
+    expect(status).toContain("blocked: no record for pass 0");
+    expect(status).not.toContain("rejected");
+    expect(check.match(/NOTICE extraction /g)?.length).toBe(1);
+    expect(check).toContain(`${url}4`);
     expect(check).not.toMatch(/FAIL /);
   });
 });

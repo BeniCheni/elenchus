@@ -1,6 +1,6 @@
 import { parseConfig } from "./config.js";
 import type { GhClient } from "./gh.js";
-import { extractRecord, guessPass } from "./records.js";
+import { extractRecord, guessPass, hasUnreadJsonFence } from "./records.js";
 import { validateSeatRecord } from "./schema.js";
 import { sameSha } from "./sha.js";
 import type {
@@ -10,6 +10,7 @@ import type {
   GhCompare,
   GhContent,
   GhPull,
+  Notice,
   PassState,
   RangeCommit,
   ReviewState,
@@ -28,7 +29,7 @@ export async function loadReview(
     paginate: true,
   })) as GhComment[];
   const config = configOverride ?? (await readConfig(gh, repo, pull.base.ref));
-  const attempts = parseAttempts(comments);
+  const { attempts, notices } = parseAttempts(comments);
   const known = new Set(config.passes.map((pass) => pass.id));
   const orphans = attempts
     .filter((attempt) => attempt.pass === null || !known.has(attempt.pass))
@@ -48,6 +49,7 @@ export async function loadReview(
     config,
     passes: compared.passes,
     orphans,
+    notices,
     inProgressPass: compared.inProgressPass,
   };
 }
@@ -65,11 +67,20 @@ async function readConfig(gh: GhClient, repo: string, ref: string): Promise<Conf
   return parseConfig(JSON.parse(text) as unknown);
 }
 
-function parseAttempts(comments: GhComment[]): Attempt[] {
+function parseAttempts(comments: GhComment[]): { attempts: Attempt[]; notices: Notice[] } {
   const ordered = [...comments].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
   const attempts: Attempt[] = [];
+  const notices: Notice[] = [];
   for (const comment of ordered) {
-    const raw = extractRecord(comment.body ?? "");
+    const body = comment.body ?? "";
+    const raw = extractRecord(body);
+    if (hasUnreadJsonFence(body)) {
+      notices.push({
+        rule: "extraction",
+        commentUrl: comment.html_url,
+        message: "json fence was not read as a record",
+      });
+    }
     if (raw === null) continue;
     let value: unknown;
     try {
@@ -99,7 +110,7 @@ function parseAttempts(comments: GhComment[]): Attempt[] {
       record: result.ok ? result.record : null,
     });
   }
-  return attempts;
+  return { attempts, notices };
 }
 
 function passField(value: unknown): string | null {

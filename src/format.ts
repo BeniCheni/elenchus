@@ -36,7 +36,8 @@ export function formatCheck(items: CheckItem[]): string {
 }
 
 function formatItem(item: CheckItem): string {
-  const parts = [item.severity === "fail" ? "FAIL" : "UNVERIFIED", item.rule];
+  const label = item.severity === "fail" ? "FAIL" : item.severity === "notice" ? "NOTICE" : "UNVERIFIED";
+  const parts = [label, item.rule];
   if (item.pass) parts.push(`pass ${item.pass}`);
   if (item.finding) parts.push(`finding ${item.finding}`);
   if (item.comment) parts.push(item.comment);
