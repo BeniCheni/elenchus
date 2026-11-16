@@ -2,8 +2,6 @@ import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const FIELD_FLAGS = new Set(["-f", "-F", "--field", "--raw-field", "--input"]);
-
 export type GhGetOptions = { paginate?: boolean };
 
 export interface GhClient {
@@ -12,26 +10,19 @@ export interface GhClient {
 
 export type CommandRunner = (command: string, args: string[]) => Promise<string>;
 
-/** Refuse any gh invocation that is not a GET, or that carries a field flag. */
+/**
+ * Allow exactly `api --method GET [--paginate] /path`.
+ * Anything else is refused before gh is spawned.
+ */
 export function assertGhReadOnly(args: string[]): void {
-  for (const arg of args) {
-    const name = arg.split("=", 1)[0] ?? arg;
-    if (FIELD_FLAGS.has(name)) {
-      throw new Error(`gh write refused: ${name}`);
-    }
-  }
-  let method = "GET";
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i] ?? "";
-    if (arg === "--method" || arg === "-X") {
-      method = args[i + 1] ?? "";
-    } else if (arg.startsWith("--method=") || arg.startsWith("-X=")) {
-      method = arg.slice(arg.indexOf("=") + 1);
-    }
-  }
-  if (method.toUpperCase() !== "GET") {
-    throw new Error(`gh write refused: method ${method}`);
-  }
+  if (readPath(args) === null) throw new Error(`gh write refused: ${args.join(" ")}`);
+}
+
+function readPath(args: string[]): string | null {
+  if (args[0] !== "api" || args[1] !== "--method" || args[2] !== "GET") return null;
+  if (args.length === 4) return args[3]?.startsWith("/") ? args[3] : null;
+  if (args.length === 5 && args[3] === "--paginate") return args[4]?.startsWith("/") ? args[4] : null;
+  return null;
 }
 
 export function ghApiArgs(apiPath: string, options?: GhGetOptions): string[] {

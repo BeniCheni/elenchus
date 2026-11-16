@@ -19,7 +19,8 @@ describe("gh read-only wrapper", () => {
       "--paginate",
       "/repos/BeniCheni/elenchus/issues/1/comments?per_page=100",
     ]);
-    expect(() => assertGhReadOnly(["api", "/repos/BeniCheni/elenchus"])).not.toThrow();
+    expect(() => assertGhReadOnly(["api", "--method", "GET", "/repos/BeniCheni/elenchus"])).not.toThrow();
+    expect(() => assertGhReadOnly(["api", "/repos/BeniCheni/elenchus"])).toThrow(/gh write refused/);
   });
 
   it("refuses every method but GET and every field flag, without spawning", async () => {
@@ -29,9 +30,9 @@ describe("gh read-only wrapper", () => {
       return "{}";
     });
     for (const method of methods) {
-      expect(() => assertGhReadOnly(["api", "--method", method, "/repos/x"])).toThrow(/gh write refused: method/);
-      expect(() => assertGhReadOnly(["api", "--method=" + method, "/repos/x"])).toThrow(/gh write refused: method/);
-      expect(() => assertGhReadOnly(["api", "-X", method, "/repos/x"])).toThrow(/gh write refused: method/);
+      expect(() => assertGhReadOnly(["api", "--method", method, "/repos/x"])).toThrow(/gh write refused/);
+      expect(() => assertGhReadOnly(["api", "--method=" + method, "/repos/x"])).toThrow(/gh write refused/);
+      expect(() => assertGhReadOnly(["api", "-X", method, "/repos/x"])).toThrow(/gh write refused/);
     }
     for (const flag of refused) {
       expect(() => assertGhReadOnly(["api", "--method", "GET", flag, "name=value"])).toThrow(/gh write refused/);
@@ -43,5 +44,35 @@ describe("gh read-only wrapper", () => {
       }).get("/repos/x"),
     ).rejects.toThrow(/spawned/);
     expect(spawned).toEqual(["api --method GET /repos/x"]);
+  });
+
+  it("refuses the write forms a denylist let through, and does not spawn", () => {
+    const forms = [
+      ["api", "-XPOST", "/x"],
+      ["api", "-iXDELETE", "/x"],
+      ["api", "/x", "-fbody=x"],
+      ["api", "--method", "GET", "-XPATCH", "/x"],
+      ["api", "-Fdraft=false", "/x"],
+      ["api", "graphql", "-fquery=mutation { add }"],
+      ["pr", "merge", "1"],
+      ["pr", "comment", "1", "--body", "x"],
+      ["repo", "delete", "BeniCheni/elenchus"],
+      ["workflow", "run", "ci.yml"],
+      ["label", "create", "fixture"],
+      ["release", "create", "--title", "x"],
+    ];
+    for (const args of forms) {
+      expect(() => assertGhReadOnly(args)).toThrow(/gh write refused/);
+    }
+  });
+
+  it("refuses a non-read through GhClient before gh is spawned", async () => {
+    let spawned = false;
+    const gh = cliGh(async () => {
+      spawned = true;
+      return "{}";
+    });
+    await expect(gh.get("-XPOST")).rejects.toThrow(/gh write refused/);
+    expect(spawned).toBe(false);
   });
 });
