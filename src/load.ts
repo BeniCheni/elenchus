@@ -15,6 +15,7 @@ import type {
   RangeCommit,
   ReviewState,
   SeatRecord,
+  Unreadable,
 } from "./types.js";
 
 export async function loadReview(
@@ -29,8 +30,8 @@ export async function loadReview(
     paginate: true,
   })) as GhComment[];
   const config = configOverride ?? (await readConfig(gh, repo, pull.base.ref));
-  const { attempts, notices } = parseAttempts(comments);
   const known = new Set(config.passes.map((pass) => pass.id));
+  const { attempts, notices, unreadable } = parseAttempts(comments, config, known);
   const orphans = attempts
     .filter((attempt) => attempt.pass === null || !known.has(attempt.pass))
     .map((attempt) => ({
@@ -50,6 +51,7 @@ export async function loadReview(
     passes: compared.passes,
     orphans,
     notices,
+    unreadable: listedUnreadable(unreadable, compared.passes),
     inProgressPass: compared.inProgressPass,
   };
 }
@@ -67,10 +69,17 @@ async function readConfig(gh: GhClient, repo: string, ref: string): Promise<Conf
   return parseConfig(JSON.parse(text) as unknown);
 }
 
-function parseAttempts(comments: GhComment[]): { attempts: Attempt[]; notices: Notice[] } {
+type UnreadableEvent = { commentUrl: string; reason: string; target: string | null };
+
+function parseAttempts(
+  comments: GhComment[],
+  config: Config,
+  known: Set<string>,
+): { attempts: Attempt[]; notices: Notice[]; unreadable: UnreadableEvent[] } {
   const ordered = [...comments].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
   const attempts: Attempt[] = [];
   const notices: Notice[] = [];
+  const unreadable: UnreadableEvent[] = [];
   for (const comment of ordered) {
     const body = comment.body ?? "";
     const raw = extractRecord(body);
@@ -87,54 +96,118 @@ function parseAttempts(comments: GhComment[]): { attempts: Attempt[]; notices: N
       value = JSON.parse(raw) as unknown;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      attempts.push({
-        pass: guessPass(raw),
+      const reason = `invalid JSON: ${message}`;
+      const guessed = guessPass(raw);
+      if (guessed !== null && known.has(guessed)) {
+        attempts.push(failedAttempt(comment, guessed, reason));
+      } else {
+        countUnreadable(unreadable, attempts, config, comment, reason);
+      }
+      continue;
+    }
+    if (!isRecordAttempt(value)) {
+      notices.push({
+        rule: "extraction",
         commentUrl: comment.html_url,
-        createdAt: comment.created_at,
-        id: comment.id,
-        valid: false,
-        reason: `invalid JSON: ${message}`,
-        record: null,
+        message: "json block is not a seat record",
       });
       continue;
     }
     const result = validateSeatRecord(value);
-    const pass = result.ok ? result.record.pass : passField(value) ?? guessPass(raw);
-    attempts.push({
-      pass,
-      commentUrl: comment.html_url,
-      createdAt: comment.created_at,
-      id: comment.id,
-      valid: result.ok,
-      reason: result.ok ? null : result.reason,
-      record: result.ok ? result.record : null,
-    });
+    const pass = passField(value);
+    if (pass !== null && known.has(pass)) {
+      attempts.push({
+        pass,
+        commentUrl: comment.html_url,
+        createdAt: comment.created_at,
+        id: comment.id,
+        valid: result.ok,
+        reason: result.ok ? null : result.reason,
+        record: result.ok ? result.record : null,
+      });
+      continue;
+    }
+    countUnreadable(unreadable, attempts, config, comment, result.ok ? "pass cannot be read" : result.reason);
   }
-  return { attempts, notices };
+  return { attempts, notices, unreadable };
+}
+
+function failedAttempt(comment: GhComment, pass: string, reason: string): Attempt {
+  return {
+    pass,
+    commentUrl: comment.html_url,
+    createdAt: comment.created_at,
+    id: comment.id,
+    valid: false,
+    reason,
+    record: null,
+  };
+}
+
+/** A parsed object is a record attempt only when seat_record or pass is at the top level. */
+function isRecordAttempt(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return "seat_record" in record || "pass" in record;
 }
 
 function passField(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const pass = (value as { pass?: unknown }).pass;
-  return typeof pass === "string" ? pass : null;
+  if (typeof pass === "string") return pass;
+  if (typeof pass === "number" && Number.isFinite(pass)) return String(pass);
+  return null;
+}
+
+function countUnreadable(
+  unreadable: UnreadableEvent[],
+  attempts: Attempt[],
+  config: Config,
+  comment: GhComment,
+  reason: string,
+): void {
+  const target = config.passes.find((pass) => !attempts.some((attempt) => attempt.pass === pass.id && attempt.valid))?.id ?? null;
+  unreadable.push({ commentUrl: comment.html_url, reason, target });
+  if (target === null) return;
+  attempts.push(failedAttempt(comment, target, reason));
+}
+
+function listedUnreadable(events: UnreadableEvent[], passes: PassState[]): Unreadable[] {
+  const listed: Unreadable[] = [];
+  for (const event of events) {
+    if (event.target === null) {
+      listed.push({ commentUrl: event.commentUrl, reason: event.reason, attached: false });
+      continue;
+    }
+    const pass = passes.find((candidate) => candidate.id === event.target);
+    if (!pass || pass.outcome.kind !== "rejected") continue;
+    listed.push({ commentUrl: event.commentUrl, reason: event.reason, attached: true });
+  }
+  return listed;
 }
 
 function passState(pass: { id: string; role: string; seat: string }, attempts: Attempt[]): PassState {
   const base = { id: pass.id, role: pass.role, seat: pass.seat, outputIsAncestor: null, range: null };
-  if (attempts.length === 0) return { ...base, outcome: { kind: "absent" } };
-  const last = attempts[attempts.length - 1] as Attempt;
-  if (last.valid && last.record) {
-    const priorFailures = attempts.slice(0, -1).filter((attempt) => !attempt.valid).length;
+  const valid = attempts.filter((attempt) => attempt.valid && attempt.record);
+  const chosen = valid[valid.length - 1];
+  if (chosen?.record) {
+    const priorFailures = attempts.filter((attempt) => !attempt.valid && isBefore(attempt, chosen)).length;
+    const laterRejections = attempts
+      .filter((attempt) => !attempt.valid && isBefore(chosen, attempt))
+      .map((attempt) => ({ commentUrl: attempt.commentUrl, reason: attempt.reason ?? "malformed record" }));
     return {
       ...base,
       outcome: {
         kind: "recorded",
-        record: last.record,
-        commentUrl: last.commentUrl,
+        record: chosen.record,
+        commentUrl: chosen.commentUrl,
         priorFailures,
+        laterRejections,
       },
     };
   }
+  if (attempts.length === 0) return { ...base, outcome: { kind: "absent" } };
+  const last = attempts[attempts.length - 1] as Attempt;
   const failures = attempts.filter((attempt) => !attempt.valid).length;
   return {
     ...base,
@@ -145,6 +218,10 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
       failures,
     },
   };
+}
+
+function isBefore(attempt: Attempt, other: Attempt): boolean {
+  return attempt.createdAt < other.createdAt || (attempt.createdAt === other.createdAt && attempt.id < other.id);
 }
 
 async function attachGit(

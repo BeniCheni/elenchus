@@ -273,3 +273,83 @@ describe("record extraction", () => {
     expect(check).not.toMatch(/FAIL /);
   });
 });
+
+describe("attribution", () => {
+  const url = (id: number) => `https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${id}`;
+
+  function prefix(through: string) {
+    const ids = ["0", "1", "1.5", "2", "2.5", "3", "exec"];
+    const stop = ids.indexOf(through);
+    return ids.slice(0, stop + 1).map((id, index) =>
+      comment(index + 1, fenced(seat({ pass: id })), `2026-11-14T00:00:${String(index + 1).padStart(2, "0")}Z`),
+    );
+  }
+
+  it("keeps a valid record when a later comment ends with a partial pass excerpt", async () => {
+    const excerpt = "```json\n{ \"pass\": \"1\", \"findings\": [ { \"id\": \"3\" } ] }\n```\n";
+    const { status, check } = await review([
+      ...prefix("1"),
+      comment(9, `Discussion.\n\n${excerpt}`, "2026-11-14T00:00:09Z"),
+    ]);
+    expect(status).toContain("pass 1: recorded");
+    expect(status).not.toContain("pass 1: rejected");
+    expect(status).not.toContain("back to the seat");
+    expect(check).toContain(`FAIL schema pass 1 ${url(9)}`);
+    expect(check).not.toMatch(/skipped pass 1/);
+  });
+
+  it("treats a status receipt pasted at the end of a later comment as a notice", async () => {
+    const receipt = {
+      repo: "BeniCheni/elenchus",
+      pr: 1,
+      passes: [{ pass: "0", state: "recorded" }],
+      next: { step: "authorize" },
+    };
+    const body = `Receipt.\n\n\`\`\`json\n${JSON.stringify(receipt, null, 2)}\n\`\`\`\n`;
+    const { status, check } = await review([
+      ...prefix("exec"),
+      comment(20, body, "2026-11-14T00:01:00Z"),
+    ]);
+    expect(status).toContain("pass 0: recorded");
+    expect(status).toContain("next: authorize");
+    expect(status).not.toContain("rejected");
+    expect(check).toContain(`NOTICE extraction ${url(20)} json block is not a seat record`);
+    expect(check).not.toMatch(/FAIL /);
+  });
+
+  it("reads a numeric pass as that pass, then accepts a later record whose retries count includes it", async () => {
+    const numeric = { ...seat({ pass: "2" }), pass: 2 };
+    const { status, check } = await review([
+      ...prefix("1.5"),
+      comment(8, fenced(numeric), "2026-11-14T00:00:08Z"),
+      comment(9, fenced(seat({ pass: "2", retries: 1 })), "2026-11-14T00:00:09Z"),
+    ]);
+    expect(status).toContain("pass 2: recorded");
+    expect(status).not.toContain("pass 2: rejected");
+    expect(check).not.toMatch(/FAIL /);
+    expect(check).not.toMatch(/record retries 1 but the comments show 0/);
+  });
+
+  it("lists an unreadable pass and counts it against the first pass that had no record", async () => {
+    const missing = { ...seat({ pass: "0" }) } as { pass?: string };
+    delete missing.pass;
+    const { status, check } = await review([comment(4, fenced(missing), "2026-11-14T00:00:04Z")]);
+    expect(status).toContain("pass 0: rejected");
+    expect(status).toContain(`unreadable pass: ${url(4)}`);
+    expect(check).toContain(`FAIL retries pass 0 ${url(4)}`);
+  });
+
+  it("only lists an unreadable pass once every pass already has a valid record", async () => {
+    const stray = { ...seat({ pass: "0" }), pass: "nope" };
+    const { status, check } = await review([
+      ...prefix("exec"),
+      comment(30, fenced(stray), "2026-11-14T00:02:00Z"),
+    ]);
+    expect(status).toContain("pass exec: recorded");
+    expect(status).toContain("next: authorize");
+    expect(status).toContain(`unreadable pass: ${url(30)}`);
+    expect(check).toContain(`FAIL schema ${url(30)}`);
+    expect(check).not.toMatch(/FAIL sequence/);
+    expect(check).not.toMatch(/FAIL retries/);
+  });
+});

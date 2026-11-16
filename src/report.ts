@@ -28,6 +28,7 @@ export function buildStatus(state: ReviewState): StatusView {
       reason: pass.outcome.kind === "rejected" ? pass.outcome.reason : null,
     })),
     next: nextStep(state, firstOpen),
+    unreadable: state.unreadable,
   };
 }
 
@@ -119,9 +120,19 @@ export function buildCheck(state: ReviewState): CheckItem[] {
     }
   }
   checkChain(state, items);
+  checkLaterRejections(state, items);
   checkFindings(state, items);
   checkRoutes(state, items);
   checkRetries(state, items);
+  for (const item of state.unreadable) {
+    if (item.attached) continue;
+    items.push({
+      severity: "fail",
+      rule: "schema",
+      comment: item.commentUrl,
+      message: item.reason,
+    });
+  }
   for (const notice of state.notices) {
     items.push({
       severity: "notice",
@@ -203,6 +214,21 @@ function checkAuthors(config: Config, pass: PassState, items: CheckItem[]): void
         pass: pass.id,
         comment: pass.outcome.commentUrl,
         message: `commit ${commit.sha} author "${commit.author}" is not vendor ${vendor.name}`,
+      });
+    }
+  }
+}
+
+function checkLaterRejections(state: ReviewState, items: CheckItem[]): void {
+  for (const pass of state.passes) {
+    if (pass.outcome.kind !== "recorded") continue;
+    for (const rejection of pass.outcome.laterRejections) {
+      items.push({
+        severity: "fail",
+        rule: "schema",
+        pass: pass.id,
+        comment: rejection.commentUrl,
+        message: rejection.reason,
       });
     }
   }

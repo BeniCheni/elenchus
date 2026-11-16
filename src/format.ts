@@ -21,6 +21,9 @@ export function formatStatus(view: StatusView): string {
       lines.push(`pass ${pass.pass}: not recorded, ${pass.role}, seat ${pass.seat}`);
     }
   }
+  for (const item of view.unreadable) {
+    lines.push(`unreadable pass: ${item.commentUrl} ${item.reason}`);
+  }
   lines.push("");
   lines.push(`next: ${view.next.step}`);
   if (view.next.seat) lines.push(`seat: ${view.next.seat}`);

@@ -103,6 +103,10 @@ export type Attempt = {
 
 export type RangeCommit = { sha: string; author: string };
 
+export type LaterRejection = { commentUrl: string; reason: string };
+
+export type Unreadable = { commentUrl: string; reason: string; attached: boolean };
+
 export type PassOutcome =
   | { kind: "absent" }
   | {
@@ -110,6 +114,7 @@ export type PassOutcome =
       record: SeatRecord;
       commentUrl: string;
       priorFailures: number;
+      laterRejections: LaterRejection[];
     }
   | {
       kind: "rejected";
@@ -143,6 +148,7 @@ export type ReviewState = {
   passes: PassState[];
   orphans: Orphan[];
   notices: Notice[];
+  unreadable: Unreadable[];
   inProgressPass: string | null;
 };
 
@@ -169,6 +175,7 @@ export type StatusView = {
     blocked: string;
     options: string[] | null;
   };
+  unreadable: Unreadable[];
 };
 
 export type Notice = {
