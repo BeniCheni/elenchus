@@ -45,4 +45,16 @@ describe("seat record schema v1.1", () => {
     const extra = validateSeatRecord({ ...v1, rulings: [] });
     expect(extra.ok).toBe(false);
   });
+
+  it("accepts only the finding status enum", () => {
+    const finding = { id: "7", severity: "low", status: "killed" };
+    expect(validateSeatRecord({ ...v1, findings: [finding] }).ok).toBe(true);
+    expect(validateSeatRecord({ ...v1, findings: [{ ...finding, status: "nope" }] }).ok).toBe(false);
+  });
+
+  it("accepts only a SHA of 7 to 40 hex digits", () => {
+    expect(validateSeatRecord({ ...v1, input_sha: "zzzzzzz" }).ok).toBe(false);
+    expect(validateSeatRecord({ ...v1, input_sha: "abc123" }).ok).toBe(false);
+    expect(validateSeatRecord({ ...v1, input_sha: "abc1234" }).ok).toBe(true);
+  });
 });
