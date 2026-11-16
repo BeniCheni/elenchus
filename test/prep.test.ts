@@ -188,6 +188,10 @@ describe("prep refusals", () => {
     await expect(
       prep({ head: made.second, url: made.url, root, model: "no-such-model" }),
     ).rejects.toThrow(/model no-such-model is not in the claude table/);
+    await expect(
+      prep({ head: made.second, url: made.url, root, effort: "no-such-effort" }),
+    ).rejects.toThrow(/effort no-such-effort is not in the claude table/);
+    await expect(prep({ head: made.second, url: made.url, root, pass: "3" })).rejects.toThrow(/pass 3 has no seat/);
   });
 
   it("prints the Codex and Cursor launch lines, and refuses a Cursor effort that is not the model id suffix", async () => {
