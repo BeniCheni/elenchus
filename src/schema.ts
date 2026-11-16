@@ -6,7 +6,7 @@ import type { SeatRecord } from "./types.js";
 const schemaPath = fileURLToPath(new URL("../schema/seat-record-1.1.json", import.meta.url));
 const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as object;
 
-const ajv = new Ajv2020({ allErrors: true, strict: false });
+const ajv = new Ajv2020({ allErrors: true, strict: true });
 const validate: ValidateFunction = ajv.compile(schema);
 
 export type SchemaResult =

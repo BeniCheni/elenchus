@@ -1,6 +1,6 @@
 # elenchus
 
-elenchus is a stateless controller for one pass of Kickoff's six-pass 360 review. Each run reads the pull request's comments and commits from GitHub and says what the review needs next. It keeps no state on disk and no cache, and it never writes to GitHub. GitHub access is a `gh` subprocess limited to GET.
+elenchus is a stateless controller for one pass of Kickoff's six-pass 360 review. Each run reads the pull request's comments and commits from GitHub and says what the review needs next. It keeps no cache and it never writes to GitHub. GitHub access is a `gh` subprocess limited to GET. `ELENCHUS_RECORD_DIR`, off by default, saves each API response into that directory so a test can keep a fixture. The tool never reads those files back.
 
 This repository is a proof of concept under development. `main` holds the tool. `replay/*` branches hold a replay of [BeniCheni/kickoff#320](https://github.com/BeniCheni/kickoff/pull/320) as fixtures. Those pull requests are drafts, labelled `fixture`, and are never merged.
 

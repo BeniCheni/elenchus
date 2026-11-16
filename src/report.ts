@@ -91,7 +91,7 @@ function nextStep(state: ReviewState, firstOpen: PassState | undefined): StatusV
       seat: firstOpen.seat,
       role: firstOpen.role,
       blocked: `commits pushed after pass ${previous?.id ?? "none"} and pass ${firstOpen.id} has no record`,
-      options: ["wait", "or re-route"],
+      options: ["wait", "re-route"],
     };
   }
   return {

@@ -30,7 +30,7 @@ export function formatStatus(view: StatusView): string {
   if (view.next.seat) lines.push(`seat: ${view.next.seat}`);
   if (view.next.role) lines.push(`role: ${view.next.role}`);
   lines.push(`blocked: ${view.next.blocked}`);
-  if (view.next.options) lines.push(`options: ${view.next.options.join(", ")}`);
+  if (view.next.options) lines.push(`options: ${view.next.options.join(", or ")}`);
   return `${lines.join("\n")}\n`;
 }
 
