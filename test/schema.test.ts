@@ -1,0 +1,48 @@
+import { describe, expect, it } from "vitest";
+import { validateSeatRecord } from "../src/schema.js";
+
+const v1 = {
+  seat_record: 1,
+  pr: 320,
+  pass: "2",
+  runtime: "cursor agent -p",
+  model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 256K Extra High" },
+  effort: { requested: "xhigh", observed: "xhigh" },
+  route: { recommended_by: "Planner", confirmed_by: "Beni" },
+  input_sha: "89b8067",
+  output_sha: "09324fb",
+  commits: ["0c7bdd8", "09324fb"],
+  findings: [{ id: "F6", severity: "low", status: "contested" }],
+  verdict: "mergeable after fixes",
+};
+
+describe("seat record schema v1.1", () => {
+  it("accepts a v1 record that omits every v1.1 field", () => {
+    expect(validateSeatRecord(v1).ok).toBe(true);
+  });
+
+  it("accepts the v1.1 additions", () => {
+    const result = validateSeatRecord({
+      ...v1,
+      runtime_version: "2026.11.13-eacade1",
+      session: { id: "abc", log: "stream-json init" },
+      mode: { requested: "write", observed: null, source: "not reported" },
+      posted_by: "BeniCheni",
+      route: { ...v1.route, by_hand: false },
+      findings: [{ ...v1.findings[0], disposition: "accept", path: "src/a.ts", start_line: 1, end_line: 2, category: "layout", evidence: "probe" }],
+      coverage: { total: 1, reviewed: 1, skipped: [] },
+      not_verified: ["a phone"],
+      retries: 0,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a record the schema does not describe", () => {
+    expect(validateSeatRecord({ ...v1, verdict: undefined }).ok).toBe(false);
+    const missing = validateSeatRecord({ ...v1, pass: "reread" });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.reason).toMatch(/pass/);
+    const extra = validateSeatRecord({ ...v1, rulings: [] });
+    expect(extra.ok).toBe(false);
+  });
+});

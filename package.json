@@ -1,0 +1,30 @@
+{
+  "name": "elenchus",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A stateless controller that reads one Kickoff 360 seat record per pass and says what the review needs next.",
+  "type": "module",
+  "bin": {
+    "elenchus": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  }
+}
