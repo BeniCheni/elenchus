@@ -124,6 +124,7 @@ export function buildCheck(state: ReviewState): CheckItem[] {
   checkFindings(state, items);
   checkRoutes(state, items);
   checkRetries(state, items);
+  checkPostedBy(state, items);
   for (const item of state.unreadable) {
     if (item.attached) continue;
     items.push({
@@ -313,6 +314,22 @@ function checkObserved(
     comment: pass.outcome.commentUrl,
     message: `${field} requested ${observed.requested} observed ${observed.observed}`,
   });
+}
+
+function checkPostedBy(state: ReviewState, items: CheckItem[]): void {
+  for (const pass of state.passes) {
+    if (pass.outcome.kind !== "recorded") continue;
+    const postedBy = pass.outcome.record.posted_by;
+    if (postedBy !== undefined && postedBy !== pass.outcome.authorLogin) {
+      items.push({
+        severity: "fail",
+        rule: "posted_by",
+        pass: pass.id,
+        comment: pass.outcome.commentUrl,
+        message: `posted_by ${postedBy} is not ${pass.outcome.authorLogin}`,
+      });
+    }
+  }
 }
 
 function checkRetries(state: ReviewState, items: CheckItem[]): void {

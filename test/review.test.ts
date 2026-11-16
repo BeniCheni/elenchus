@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { parseConfig } from "../src/config.js";
 import { formatCheck, formatStatus } from "../src/format.js";
 import { loadReview } from "../src/load.js";
 import { buildCheck, buildStatus } from "../src/report.js";
@@ -351,5 +353,57 @@ describe("attribution", () => {
     expect(check).toContain(`FAIL schema ${url(30)}`);
     expect(check).not.toMatch(/FAIL sequence/);
     expect(check).not.toMatch(/FAIL retries/);
+  });
+});
+
+describe("record authors", () => {
+  const url = (id: number) => `https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${id}`;
+
+  function recorded(through: string) {
+    const ids = ["0", "1", "1.5", "2", "2.5", "3", "exec"];
+    const stop = ids.indexOf(through);
+    return ids.slice(0, stop + 1).map((id, index) =>
+      comment(index + 1, fenced(seat({ pass: id })), `2026-11-14T00:00:${String(index + 1).padStart(2, "0")}Z`),
+    );
+  }
+
+  it("rejects a configuration that omits record_authors", () => {
+    const file = new URL("../examples/kickoff.elenchus.json", import.meta.url);
+    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    delete raw.record_authors;
+    expect(() => parseConfig(raw)).toThrow(/record_authors/);
+  });
+
+  it("ignores another account's valid exec record", async () => {
+    const { status, check } = await review([
+      ...recorded("3"),
+      comment(12, fenced(seat({ pass: "exec", posted_by: "BeniCheni" })), "2026-11-14T00:00:12Z", "mallory"),
+    ]);
+    expect(status).toContain("next: exec");
+    expect(status).not.toContain("next: authorize");
+    expect(check).toContain(`NOTICE record_authors ${url(12)} comment by mallory ignored for records`);
+    expect(check).not.toMatch(/FAIL /);
+  });
+
+  it("does not escalate when another account posts three malformed blocks", async () => {
+    const bad = "```json\n{\"seat_record\":1,\"pass\":\"1\"}\n```\n";
+    const { status, check } = await review([
+      ...recorded("exec"),
+      comment(21, bad, "2026-11-14T00:00:21Z", "mallory"),
+      comment(22, bad, "2026-11-14T00:00:22Z", "mallory"),
+      comment(23, bad, "2026-11-14T00:00:23Z", "mallory"),
+    ]);
+    expect(status).toContain("next: authorize");
+    expect(status).not.toContain("escalate to Beni");
+    expect(check.match(/NOTICE record_authors /g)?.length).toBe(3);
+    expect(check).not.toMatch(/FAIL /);
+  });
+
+  it("fails posted_by when it differs from the comment author", async () => {
+    const { status, check } = await review([
+      comment(1, fenced(seat({ pass: "0", posted_by: "mallory" })), "2026-11-14T00:00:01Z"),
+    ]);
+    expect(status).toContain("pass 0: recorded");
+    expect(check).toContain(`FAIL posted_by pass 0 ${url(1)} posted_by mallory is not BeniCheni`);
   });
 });

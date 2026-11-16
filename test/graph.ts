@@ -10,13 +10,13 @@ export function kickoffConfig(): Config {
   return parseConfig(JSON.parse(readFileSync(file, "utf8")) as unknown);
 }
 
-export function comment(id: number, body: string, createdAt: string): GhComment {
+export function comment(id: number, body: string, createdAt: string, login = "BeniCheni"): GhComment {
   return {
     id,
     html_url: `https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${id}`,
     body,
     created_at: createdAt,
-    user: { login: "BeniCheni" },
+    user: { login },
   };
 }
 

@@ -6,4 +6,6 @@ This repository is a proof of concept under development. `main` holds the tool. 
 
 Sprint 1 is the read-only controller: `elenchus status` and `elenchus check`. A seat record is the one fenced `json` block that ends a pull-request comment, validated against `schema/seat-record-1.1.json`. What is Kickoff's — the pass order, seat roles, vendor commit identities, and the exact observed strings that count as each requested model and effort — is read from `.elenchus.json` on the pull request's base branch. `--config` overrides that file for tests.
 
+`record_authors` in that file is the list of GitHub logins whose comments may carry records. A comment by any other login is ignored, and check prints a notice with the comment's URL and login. A record's `posted_by`, when it is present, must equal the comment author's login; check reports a mismatch under the rule `posted_by`. A configuration without `record_authors` is an error.
+
 Not in this sprint: preparing a seat, authorizing a merge, posting a status, tagging, or a pass value for the PM seat's re-read after the executor.

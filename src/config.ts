@@ -17,12 +17,15 @@ export function parseConfig(value: unknown): Config {
   if (typeof raw.retry_cap !== "number" || !Number.isInteger(raw.retry_cap) || raw.retry_cap < 0) {
     throw new Error("config.retry_cap must be a non-negative integer");
   }
+  if (!Array.isArray(raw.record_authors) || raw.record_authors.some((login) => typeof login !== "string")) {
+    throw new Error("config.record_authors must list the GitHub logins whose comments may carry records");
+  }
   if (!raw.vendors || typeof raw.vendors !== "object") throw new Error("config.vendors is missing");
   const vendors: Config["vendors"] = {};
   for (const [name, entry] of Object.entries(raw.vendors as Record<string, unknown>)) {
     vendors[name] = parseVendor(name, entry);
   }
-  return { passes, vendors, retry_cap: raw.retry_cap };
+  return { passes, vendors, retry_cap: raw.retry_cap, record_authors: raw.record_authors as string[] };
 }
 
 function parseVendor(name: string, value: unknown): VendorConfig {

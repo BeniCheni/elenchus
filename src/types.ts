@@ -59,6 +59,8 @@ export type Config = {
   passes: PassConfig[];
   vendors: Record<string, VendorConfig>;
   retry_cap: number;
+  /** GitHub logins whose comments may carry seat records. */
+  record_authors: string[];
 };
 
 export type GhComment = {
@@ -96,6 +98,7 @@ export type Attempt = {
   commentUrl: string;
   createdAt: string;
   id: number;
+  authorLogin: string;
   valid: boolean;
   reason: string | null;
   record: SeatRecord | null;
@@ -113,6 +116,7 @@ export type PassOutcome =
       kind: "recorded";
       record: SeatRecord;
       commentUrl: string;
+      authorLogin: string;
       priorFailures: number;
       laterRejections: LaterRejection[];
     }

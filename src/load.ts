@@ -81,6 +81,15 @@ function parseAttempts(
   const notices: Notice[] = [];
   const unreadable: UnreadableEvent[] = [];
   for (const comment of ordered) {
+    const login = comment.user?.login ?? "";
+    if (!config.record_authors.includes(login)) {
+      notices.push({
+        rule: "record_authors",
+        commentUrl: comment.html_url,
+        message: `comment by ${login || "unknown"} ignored for records`,
+      });
+      continue;
+    }
     const body = comment.body ?? "";
     const raw = extractRecord(body);
     if (hasUnreadJsonFence(body)) {
@@ -121,6 +130,7 @@ function parseAttempts(
         commentUrl: comment.html_url,
         createdAt: comment.created_at,
         id: comment.id,
+        authorLogin: comment.user?.login ?? "",
         valid: result.ok,
         reason: result.ok ? null : result.reason,
         record: result.ok ? result.record : null,
@@ -138,6 +148,7 @@ function failedAttempt(comment: GhComment, pass: string, reason: string): Attemp
     commentUrl: comment.html_url,
     createdAt: comment.created_at,
     id: comment.id,
+    authorLogin: comment.user?.login ?? "",
     valid: false,
     reason,
     record: null,
@@ -201,6 +212,7 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
         kind: "recorded",
         record: chosen.record,
         commentUrl: chosen.commentUrl,
+        authorLogin: chosen.authorLogin,
         priorFailures,
         laterRejections,
       },
