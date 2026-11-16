@@ -283,6 +283,12 @@ function cursorDefault(): string {
   });
 }
 
+const resolvedGh = (await raw("which", ["gh"])).trim();
+if (resolvedGh !== path.join(bin, "gh")) throw new Error(`gh is not the stub: ${resolvedGh}`);
+if (isolated.GH_TOKEN !== "dummy" || !isolated.GH_HOST?.endsWith(".invalid")) {
+  throw new Error("the probe environment could reach GitHub as Beni");
+}
+
 const cursorBefore = cursorDefault();
 const { bare, sha } = await scratch();
 const probes: Probe[] = [];
