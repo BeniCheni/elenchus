@@ -1,0 +1,65 @@
+{
+  "passes": [
+    { "id": "0", "role": "brief the cold review", "seat": "PM" },
+    { "id": "1", "role": "cold review", "seat": "reviewer" },
+    { "id": "1.5", "role": "rebuttal brief", "seat": "PM" },
+    { "id": "2", "role": "rebuttal", "seat": "builder" },
+    { "id": "2.5", "role": "synthesis", "seat": "PM" },
+    { "id": "3", "role": "adjudication", "seat": "Beni" },
+    { "id": "exec", "role": "executor", "seat": "executor" }
+  ],
+  "vendors": {
+    "claude": {
+      "authors": ["Claude <noreply@anthropic.com>"],
+      "runtimes": ["Claude Code", "claude -p"],
+      "models": {
+        "claude-fable-5-2": ["claude-fable-5-2", "Fable 5.2"],
+        "claude-haiku-5-5": ["claude-haiku-5-5"],
+        "claude-sonnet-5-5": ["claude-sonnet-5-5"],
+        "haiku": ["claude-haiku-5-5", "haiku"],
+        "Opus 5.5": ["Opus 5.5"]
+      },
+      "efforts": {
+        "xhigh": ["xhigh", "Extra"],
+        "high": ["high"],
+        "medium": ["medium"],
+        "low": ["low"]
+      }
+    },
+    "codex": {
+      "authors": ["Codex <noreply@openai.com>"],
+      "runtimes": ["Codex", "codex exec"],
+      "models": {
+        "gpt-6.1-sol": ["gpt-6.1-sol"]
+      },
+      "efforts": {
+        "low": ["low"],
+        "medium": ["medium"],
+        "high": ["high"],
+        "xhigh": ["xhigh"]
+      }
+    },
+    "cursor": {
+      "authors": ["Cursor <cursoragent@cursor.com>"],
+      "runtimes": ["Cursor", "cursor agent -p"],
+      "models": {
+        "grok-4.7-xhigh": [
+          "grok-4.7-xhigh",
+          "Grok 4.7 256K Extra High",
+          "Grok 4.7 Extra High"
+        ],
+        "grok-4.7-high": ["grok-4.7-high", "Grok 4.7 256K High"],
+        "grok-4.7-medium": ["grok-4.7-medium", "Grok 4.7 256K Medium"],
+        "grok-4.7-low": ["grok-4.7-low", "Grok 4.7 256K Low"]
+      },
+      "efforts": {
+        "xhigh": ["xhigh", "Extra High"],
+        "high": ["high", "High"],
+        "medium": ["medium", "Medium"],
+        "low": ["low", "Low"]
+      }
+    }
+  },
+  "retry_cap": 2,
+  "record_authors": ["BeniCheni"]
+}

@@ -1,0 +1,16 @@
+repo: BeniCheni/elenchus
+pr: 1
+head: dcb914e3724e0e6ed0462f52f248185f9e138d6a
+base: replay/main b216e810e12a139999ae74933ead8f1b88d2b8ec
+
+pass 0: recorded, brief the cold review, seat PM, output 0faf606, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925461873
+pass 1: recorded, cold review, seat reviewer, output 89b8067, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925472892
+pass 1.5: recorded, rebuttal brief, seat PM, output 89b8067, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925482534
+pass 2: recorded, rebuttal, seat builder, output 09324fb, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925488726
+pass 2.5: recorded, synthesis, seat PM, output 09324fb, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925497719
+pass 3: recorded, adjudication, seat Beni, output 09324fb, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925503434
+pass exec: recorded, executor, seat executor, output dcb914e, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925540982
+head equals last output_sha dcb914e
+
+next: authorize
+blocked: Sprint 3 builds authorize

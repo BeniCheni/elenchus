@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BeniCheni/elenchus/schema/seat-record-1.1.json",
+  "title": "Kickoff seat record v1.1",
+  "description": "seat_record stays 1. Every v1.1 addition is optional, so a v1 record still validates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "seat_record",
+    "pr",
+    "pass",
+    "runtime",
+    "model",
+    "effort",
+    "route",
+    "input_sha",
+    "output_sha",
+    "commits",
+    "findings",
+    "verdict"
+  ],
+  "properties": {
+    "seat_record": { "const": 1 },
+    "pr": { "type": "integer", "minimum": 1 },
+    "pass": { "enum": ["0", "1", "1.5", "2", "2.5", "3", "exec"] },
+    "runtime": { "type": "string", "minLength": 1 },
+    "runtime_version": { "type": "string" },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "log"],
+      "properties": {
+        "id": { "type": "string" },
+        "log": { "type": "string" }
+      }
+    },
+    "model": { "$ref": "#/$defs/observed" },
+    "effort": { "$ref": "#/$defs/observed" },
+    "mode": { "$ref": "#/$defs/observed" },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommended_by", "confirmed_by"],
+      "properties": {
+        "recommended_by": { "type": ["string", "null"] },
+        "confirmed_by": { "type": ["string", "null"] },
+        "by_hand": { "type": "boolean" }
+      }
+    },
+    "posted_by": { "type": "string" },
+    "input_sha": { "$ref": "#/$defs/sha" },
+    "output_sha": { "$ref": "#/$defs/sha" },
+    "commits": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sha" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "reviewed", "skipped"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "reviewed": { "type": "integer", "minimum": 0 },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "reason"],
+            "properties": {
+              "path": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "not_verified": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "retries": { "type": "integer", "minimum": 0 },
+    "verdict": { "type": "string" }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-fA-F]{7,40}$" },
+    "observed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "observed"],
+      "properties": {
+        "requested": { "type": ["string", "null"] },
+        "observed": { "type": ["string", "null"] },
+        "source": { "type": "string" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "severity", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "severity": { "type": "string" },
+        "status": { "enum": ["open", "fixed", "contested", "killed"] },
+        "disposition": {
+          "enum": ["accept", "contest", "accept-observation-contest-severity"]
+        },
+        "evidence": { "type": "string" },
+        "path": { "type": "string" },
+        "start_line": { "type": "integer" },
+        "end_line": { "type": "integer" },
+        "category": { "type": "string" }
+      }
+    }
+  }
+}
