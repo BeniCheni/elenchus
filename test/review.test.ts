@@ -86,12 +86,13 @@ describe("status and check", () => {
   });
 
   it("reads comments in creation order when the array is not", async () => {
-    const bad = "```json\n{\"seat_record\":1,\"pass\":\"0\"}\n```\n";
-    const { check } = await review([
-      comment(2, fenced(seat({ pass: "0", retries: 1 })), "2026-11-14T00:00:02Z"),
-      comment(1, bad, "2026-11-14T00:00:01Z"),
+    const { status } = await review([
+      comment(2, fenced(seat({ pass: "0", verdict: "later" })), "2026-11-14T00:00:02Z"),
+      comment(1, fenced(seat({ pass: "0", verdict: "earlier" })), "2026-11-14T00:00:01Z"),
     ]);
-    expect(check).not.toMatch(/FAIL /);
+    expect(status).toContain("pass 0: recorded");
+    expect(status).toContain("issuecomment-2");
+    expect(status).not.toContain("issuecomment-1");
   });
 
   it("says when a record's retries field disagrees with the comments", async () => {
