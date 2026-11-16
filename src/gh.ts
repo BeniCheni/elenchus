@@ -82,8 +82,17 @@ export function recordingGh(inner: GhClient, dir: string): GhClient {
     async get(apiPath, options) {
       const value = await inner.get(apiPath, options);
       const file = path.join(dir, `${encodeURIComponent(apiPath)}.json`);
-      writeFileSync(file, JSON.stringify(value));
+      writeFileSync(file, JSON.stringify(slimCompare(value)));
       return value;
     },
   };
+}
+
+/** Compare responses carry the whole diff. Records keep the fields the controller reads. */
+function slimCompare(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.commits) || !("files" in record)) return value;
+  const { files: _files, ...rest } = record;
+  return rest;
 }

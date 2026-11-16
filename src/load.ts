@@ -23,6 +23,7 @@ export async function loadReview(
   configOverride?: Config,
 ): Promise<ReviewState> {
   const pull = (await gh.get(`/repos/${repo}/pulls/${pr}`)) as GhPull;
+  const baseTip = (await gh.get(`/repos/${repo}/commits/${pull.base.ref}`)) as { sha: string };
   const comments = (await gh.get(`/repos/${repo}/issues/${pr}/comments?per_page=100`, {
     paginate: true,
   })) as GhComment[];
@@ -37,13 +38,13 @@ export async function loadReview(
       reason: attempt.reason ?? "malformed record",
     }));
   const passes = config.passes.map((pass) => passState(pass, attempts.filter((attempt) => attempt.pass === pass.id)));
-  const compared = await attachGit(gh, repo, pull.head.sha, pull.base.sha, passes);
+  const compared = await attachGit(gh, repo, pull.head.sha, baseTip.sha, passes);
   return {
     repo,
     pr: pull.number,
     head: pull.head.sha,
     baseRef: pull.base.ref,
-    baseSha: pull.base.sha,
+    baseSha: baseTip.sha,
     config,
     passes: compared.passes,
     orphans,

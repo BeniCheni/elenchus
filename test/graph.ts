@@ -27,6 +27,8 @@ export function fenced(record: unknown): string {
 export function graphGh(input: {
   head: string;
   baseSha: string;
+  /** Current tip of the base branch, when the pull request object still names an older SHA. */
+  branchTip?: string;
   baseRef?: string;
   comments: GhComment[];
   nodes: Record<string, Node>;
@@ -75,10 +77,12 @@ export function graphGh(input: {
     head: { sha: resolve(input.head) },
     base: { sha: resolve(input.baseSha), ref: input.baseRef ?? "replay/main" },
   };
+  const branchTip = resolve(input.branchTip ?? input.baseSha);
   return {
     async get(apiPath: string, options?: GhGetOptions) {
       input.calls?.push({ path: apiPath, ...(options?.paginate ? { paginate: true } : {}) });
       if (apiPath === "/repos/BeniCheni/elenchus/pulls/1") return pull;
+      if (apiPath === `/repos/BeniCheni/elenchus/commits/${pull.base.ref}`) return { sha: branchTip };
       if (apiPath.startsWith("/repos/BeniCheni/elenchus/issues/1/comments")) return input.comments;
       const match = apiPath.match(/\/compare\/([^./]+)\.\.\.([^./]+)$/);
       if (match) return compare(match[1] ?? "", match[2] ?? "");

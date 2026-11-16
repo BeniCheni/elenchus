@@ -178,6 +178,34 @@ describe("status and check", () => {
     expect(check).toMatch(/FAIL authors pass 1 .*not vendor claude/);
   });
 
+  it("uses the base branch tip when the pull request still names an older base SHA", async () => {
+    const calls: { path: string; paginate?: boolean }[] = [];
+    const gh = graphGh({
+      head: C,
+      baseSha: A,
+      branchTip: B,
+      comments: [
+        comment(1, fenced(seat({ pass: "0", output_sha: A })), "2026-11-14T00:00:01Z"),
+        comment(2, fenced(seat({
+          pass: "1",
+          runtime: "Cursor",
+          input_sha: A,
+          output_sha: C,
+          commits: [C],
+          model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 Extra High", source: "test" },
+          effort: { requested: "xhigh", observed: "Extra High", source: "test" },
+        })), "2026-11-14T00:00:02Z"),
+      ],
+      nodes,
+      calls,
+    });
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
+    const check = formatCheck(buildCheck(state));
+    expect(state.baseSha).toBe(B);
+    expect(check).not.toMatch(/FAIL /);
+    expect(calls.some((call) => call.path.endsWith("/commits/replay/main"))).toBe(true);
+  });
+
   it("drops commits reachable from the base branch before the author check", async () => {
     const { check } = await review([
       comment(1, fenced(seat({ pass: "0", output_sha: A })), "2026-11-14T00:00:01Z"),
