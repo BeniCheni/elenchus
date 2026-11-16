@@ -22,7 +22,10 @@ describe("deny profiles", () => {
     expect(claudeRead.permissions.deny).toContain("Write");
     expect(claudeRead.permissions.deny).toContain("Edit");
 
-    const cursor = JSON.parse(renderProfile("cursor", forbidden, "writing")) as { permissions: { deny: string[] } };
+    const cursor = JSON.parse(renderProfile("cursor", forbidden, "writing")) as {
+      permissions: { allow: string[]; deny: string[] };
+    };
+    expect(cursor.permissions.allow).toEqual([]);
     expect(cursor.permissions.deny).toContain("Shell(git tag)");
     expect(cursor.permissions.deny).toContain("Shell(git push --force)");
     expect(cursor.permissions.deny).toContain("Shell(gh pr merge)");

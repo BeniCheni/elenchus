@@ -17,7 +17,9 @@ export function renderProfile(vendor: VendorName, forbidden: string[], kind: Sea
   if (vendor === "codex") return renderCodex(forbidden, kind);
   const deny = forbidden.map((prefix) => (vendor === "claude" ? claudeRule(prefix) : `Shell(${prefix})`));
   if (kind === "read-only") deny.push("Write", "Edit");
-  return `${JSON.stringify({ permissions: { deny } }, null, 2)}\n`;
+  // Cursor's cli.json schema requires permissions.allow. An empty list leaves the deny list in force.
+  const permissions = vendor === "cursor" ? { allow: [] as string[], deny } : { deny };
+  return `${JSON.stringify({ permissions }, null, 2)}\n`;
 }
 
 function claudeRule(prefix: string): string {
