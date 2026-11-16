@@ -2,8 +2,10 @@
 import { readFileSync } from "node:fs";
 import { parseConfig } from "./config.js";
 import { formatCheck, formatStatus } from "./format.js";
+import { buildHandoff } from "./handoff.js";
 import { cliGh, recordingGh } from "./gh.js";
 import { loadReview } from "./load.js";
+import { formatPrep, prepareSeat } from "./prep.js";
 import { buildCheck, buildStatus } from "./report.js";
 import type { Config } from "./types.js";
 
@@ -12,6 +14,8 @@ type Target = { repo: string; pr: number };
 function usage(): never {
   console.error("usage: elenchus status <owner/repo#n | pull-url> [--json] [--repo owner/repo] [--config file]");
   console.error("       elenchus check  <owner/repo#n | pull-url> [--repo owner/repo] [--config file]");
+  console.error("       elenchus prep <owner/repo#n | n> <pass> --runtime <vendor> --model <id> --effort <word> --confirmed-by <name> [--root <dir>] [--repo owner/repo] [--config file]");
+  console.error("       elenchus handoff <owner/repo#n | n> [--repo owner/repo] [--config file]");
   process.exit(2);
 }
 
@@ -27,45 +31,104 @@ function parseTarget(arg: string, repoFlag: string | undefined): Target {
   usage();
 }
 
-function readArgs(argv: string[]): { cmd: "status" | "check"; json: boolean; config?: Config; target: Target } {
-  const [cmd, ...rest] = argv;
-  if (cmd !== "status" && cmd !== "check") usage();
+type Flags = {
+  json: boolean;
+  config?: Config;
+  repoFlag?: string;
+  runtime?: string;
+  model?: string;
+  effort?: string;
+  confirmedBy?: string;
+  root?: string;
+  positional: string[];
+};
+
+function readFlags(argv: string[], command: string): Flags {
   let json = false;
   let configPath: string | undefined;
   let repoFlag: string | undefined;
+  let runtime: string | undefined;
+  let model: string | undefined;
+  let effort: string | undefined;
+  let confirmedBy: string | undefined;
+  let root: string | undefined;
   const positional: string[] = [];
-  for (let i = 0; i < rest.length; i++) {
-    const arg = rest[i] ?? "";
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i] ?? "";
+    const take = (name: string): string => {
+      const value = argv[++i];
+      if (!value) {
+        console.error(`${command} requires ${name}`);
+        usage();
+      }
+      return value;
+    };
     if (arg === "--json") {
-      if (cmd !== "status") usage();
+      if (command !== "status") usage();
       json = true;
-    } else if (arg === "--config") {
-      configPath = rest[++i];
-      if (!configPath) usage();
-    } else if (arg === "--repo") {
-      repoFlag = rest[++i];
-      if (!repoFlag) usage();
-    } else if (arg.startsWith("-")) {
+    } else if (arg === "--config") configPath = take("--config");
+    else if (arg === "--repo") repoFlag = take("--repo");
+    else if (arg === "--runtime") runtime = take("--runtime");
+    else if (arg === "--model") model = take("--model");
+    else if (arg === "--effort") effort = take("--effort");
+    else if (arg === "--confirmed-by") confirmedBy = take("--confirmed-by");
+    else if (arg === "--root") root = take("--root");
+    else if (arg.startsWith("-")) {
       console.error(`unknown flag ${arg}`);
       usage();
-    } else {
-      positional.push(arg);
-    }
+    } else positional.push(arg);
   }
-  if (positional.length !== 1) usage();
-  const target = parseTarget(positional[0] ?? "", repoFlag);
   const config = configPath ? parseConfig(JSON.parse(readFileSync(configPath, "utf8")) as unknown) : undefined;
-  return { cmd, json, ...(config ? { config } : {}), target };
+  return {
+    json,
+    ...(config ? { config } : {}),
+    ...(repoFlag ? { repoFlag } : {}),
+    ...(runtime ? { runtime } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(confirmedBy ? { confirmedBy } : {}),
+    ...(root ? { root } : {}),
+    positional,
+  };
 }
 
 async function main(argv: string[]): Promise<void> {
-  const args = readArgs(argv);
+  const [command, ...rest] = argv;
+  if (command !== "status" && command !== "check" && command !== "prep" && command !== "handoff") usage();
+  const flags = readFlags(rest, command);
   const recordDir = process.env.ELENCHUS_RECORD_DIR;
   const gh = recordDir ? recordingGh(cliGh(), recordDir) : cliGh();
-  const state = await loadReview(gh, args.target.repo, args.target.pr, args.config);
-  if (args.cmd === "status") {
+  if (command === "prep") {
+    if (flags.positional.length !== 2) usage();
+    if (!flags.runtime || !flags.model || !flags.effort || !flags.confirmedBy) {
+      throw new Error("prep requires --runtime, --model, --effort and --confirmed-by");
+    }
+    const target = parseTarget(flags.positional[0] ?? "", flags.repoFlag);
+    const report = await prepareSeat({
+      gh,
+      repo: target.repo,
+      pr: target.pr,
+      pass: flags.positional[1] ?? "",
+      runtime: flags.runtime,
+      model: flags.model,
+      effort: flags.effort,
+      confirmedBy: flags.confirmedBy,
+      ...(flags.root ? { root: flags.root } : {}),
+      ...(flags.config ? { config: flags.config } : {}),
+    });
+    process.stdout.write(formatPrep(report));
+    return;
+  }
+  if (flags.positional.length !== 1) usage();
+  const target = parseTarget(flags.positional[0] ?? "", flags.repoFlag);
+  if (command === "handoff") {
+    process.stdout.write(await buildHandoff(gh, target.repo, target.pr, flags.config));
+    return;
+  }
+  const state = await loadReview(gh, target.repo, target.pr, flags.config);
+  if (command === "status") {
     const view = buildStatus(state);
-    process.stdout.write(args.json ? `${JSON.stringify(view, null, 2)}\n` : formatStatus(view));
+    process.stdout.write(flags.json ? `${JSON.stringify(view, null, 2)}\n` : formatStatus(view));
     return;
   }
   const items = buildCheck(state);

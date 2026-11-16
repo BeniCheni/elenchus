@@ -48,6 +48,9 @@ describe("the built command", () => {
   it("exits 2 on a usage error", () => {
     expect(run([]).status).toBe(2);
     expect(run(["status", "--nope"]).status).toBe(2);
+    const prep = run(["prep", "BeniCheni/elenchus#3", "1", "--runtime", "claude"]);
+    expect(prep.status).toBe(2);
+    expect(prep.stderr).toMatch(/prep requires --runtime, --model, --effort and --confirmed-by/);
   });
 
   it("exits 0 when check has no failure", () => {

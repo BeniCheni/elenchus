@@ -1,5 +1,6 @@
 import { parseConfig } from "./config.js";
 import type { GhClient } from "./gh.js";
+import { manifestFromCompare } from "./manifest.js";
 import { extractRecord, guessPass, hasUnreadJsonFence } from "./records.js";
 import { validateSeatRecord } from "./schema.js";
 import { sameSha } from "./sha.js";
@@ -40,7 +41,7 @@ export async function loadReview(
       reason: attempt.reason ?? "malformed record",
     }));
   const passes = config.passes.map((pass) => passState(pass, attempts.filter((attempt) => attempt.pass === pass.id)));
-  const compared = await attachGit(gh, repo, pull.head.sha, baseTip.sha, passes);
+  const compared = await attachGit(gh, repo, pull.head.sha, baseTip.sha, passes, config);
   return {
     repo,
     pr: pull.number,
@@ -249,6 +250,7 @@ async function attachGit(
   head: string,
   baseSha: string,
   passes: PassState[],
+  config: Config,
 ): Promise<{ passes: PassState[]; inProgressPass: string | null }> {
   const cache = new Map<string, GhCompare>();
   const compare = async (base: string, tip: string): Promise<GhCompare> => {
@@ -278,13 +280,22 @@ async function attachGit(
       continue;
     }
     const record = pass.outcome.record;
+    const wantsManifest = config.passes.find((item) => item.id === pass.id)?.coverage === true && record.coverage !== undefined;
     try {
       const outputIsAncestor = await isAncestorOrEqual(record.output_sha, head);
       const range = await seatRange(record, baseSha, compare, isAncestorOrEqual);
-      next.push({ ...pass, outputIsAncestor, range });
+      const coverageManifest = wantsManifest ? manifestFromCompare(await compare(baseSha, record.input_sha)) : undefined;
+      next.push({ ...pass, outputIsAncestor, range, ...(coverageManifest ? { coverageManifest } : {}) });
     } catch (error) {
       if (!(error instanceof UnresolvedSha)) throw error;
-      next.push({ ...pass, outputIsAncestor: null, range: null, resolveError: error.message });
+      const coverageManifest = wantsManifest ? { paths: [], error: error.message } : undefined;
+      next.push({
+        ...pass,
+        outputIsAncestor: null,
+        range: null,
+        resolveError: error.message,
+        ...(coverageManifest ? { coverageManifest } : {}),
+      });
     }
   }
 

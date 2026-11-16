@@ -135,6 +135,7 @@ export function buildCheck(state: ReviewState): CheckItem[] {
   checkRoutes(state, items);
   checkRetries(state, items);
   checkPostedBy(state, items);
+  checkCoverage(state, items);
   for (const item of state.unreadable) {
     if (item.attached) continue;
     items.push({
@@ -377,6 +378,75 @@ function checkRetries(state: ReviewState, items: CheckItem[]): void {
         pass: pass.id,
         comment: pass.outcome.commentUrl,
         message: `record retries ${claimed} but the comments show ${pass.outcome.priorFailures}`,
+      });
+    }
+  }
+}
+
+function checkCoverage(state: ReviewState, items: CheckItem[]): void {
+  for (const pass of state.passes) {
+    if (pass.outcome.kind !== "recorded") continue;
+    const marked = state.config.passes.find((item) => item.id === pass.id)?.coverage === true;
+    if (!marked) continue;
+    const record = pass.outcome.record;
+    if (!record.coverage) {
+      items.push({
+        severity: "unverified",
+        rule: "coverage",
+        pass: pass.id,
+        comment: pass.outcome.commentUrl,
+        message: "coverage not reported",
+      });
+      continue;
+    }
+    const manifest = pass.coverageManifest;
+    if (!manifest || manifest.error) {
+      items.push({
+        severity: "fail",
+        rule: "coverage",
+        pass: pass.id,
+        comment: pass.outcome.commentUrl,
+        message: manifest?.error ?? "file list truncated",
+      });
+      continue;
+    }
+    const coverage = record.coverage;
+    for (const skip of coverage.skipped) {
+      if (skip.reason.trim() === "") {
+        items.push({
+          severity: "fail",
+          rule: "coverage",
+          pass: pass.id,
+          comment: pass.outcome.commentUrl,
+          message: `skipped ${skip.path} has no reason`,
+        });
+      } else if (!manifest.paths.includes(skip.path)) {
+        items.push({
+          severity: "fail",
+          rule: "coverage",
+          pass: pass.id,
+          comment: pass.outcome.commentUrl,
+          message: `skipped ${skip.path} is not in the manifest`,
+        });
+      }
+    }
+    if (coverage.total !== manifest.paths.length) {
+      items.push({
+        severity: "fail",
+        rule: "coverage",
+        pass: pass.id,
+        comment: pass.outcome.commentUrl,
+        message: `total ${coverage.total} is not the manifest's ${manifest.paths.length}`,
+      });
+    }
+    if (coverage.reviewed + coverage.skipped.length !== coverage.total) {
+      const notSkipped = manifest.paths.filter((file) => !coverage.skipped.some((skip) => skip.path === file));
+      items.push({
+        severity: "fail",
+        rule: "coverage",
+        pass: pass.id,
+        comment: pass.outcome.commentUrl,
+        message: `reviewed ${coverage.reviewed} + skipped ${coverage.skipped.length} is not total ${coverage.total}; not skipped: ${notSkipped.join(", ")}`,
       });
     }
   }

@@ -17,7 +17,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "harness:t4": "npm run build && node --experimental-strip-types harness/t4.ts"
   },
   "dependencies": {
     "ajv": "8.20.0"

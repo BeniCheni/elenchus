@@ -1,12 +1,12 @@
 {
   "passes": [
-    { "id": "0", "role": "brief the cold review", "seat": "PM" },
-    { "id": "1", "role": "cold review", "seat": "reviewer" },
-    { "id": "1.5", "role": "rebuttal brief", "seat": "PM" },
-    { "id": "2", "role": "rebuttal", "seat": "builder" },
-    { "id": "2.5", "role": "synthesis", "seat": "PM" },
-    { "id": "3", "role": "adjudication", "seat": "Beni" },
-    { "id": "exec", "role": "executor", "seat": "executor" }
+    { "id": "0", "role": "brief the cold review", "seat": "PM", "seat_kind": "read-only", "coverage": false },
+    { "id": "1", "role": "cold review", "seat": "reviewer", "seat_kind": "writing", "coverage": true },
+    { "id": "1.5", "role": "rebuttal brief", "seat": "PM", "seat_kind": "read-only", "coverage": false },
+    { "id": "2", "role": "rebuttal", "seat": "builder", "seat_kind": "writing", "coverage": false },
+    { "id": "2.5", "role": "synthesis", "seat": "PM", "seat_kind": "read-only", "coverage": true },
+    { "id": "3", "role": "adjudication", "seat": "Beni", "seat_kind": "none", "coverage": false },
+    { "id": "exec", "role": "executor", "seat": "executor", "seat_kind": "writing", "coverage": false }
   ],
   "vendors": {
     "claude": {
@@ -24,7 +24,8 @@
         "high": ["high"],
         "medium": ["medium"],
         "low": ["low"]
-      }
+      },
+      "read_only_seat": true
     },
     "codex": {
       "authors": ["Codex <noreply@openai.com>"],
@@ -37,7 +38,9 @@
         "medium": ["medium"],
         "high": ["high"],
         "xhigh": ["xhigh"]
-      }
+      },
+      "read_only_seat": true,
+      "binary": "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
     },
     "cursor": {
       "authors": ["Cursor <cursoragent@cursor.com>"],
@@ -57,9 +60,33 @@
         "high": ["high", "High"],
         "medium": ["medium", "Medium"],
         "low": ["low", "Low"]
-      }
+      },
+      "read_only_seat": false
     }
   },
   "retry_cap": 2,
-  "record_authors": ["BeniCheni"]
+  "record_authors": ["BeniCheni"],
+  "forbidden": [
+    "git tag",
+    "git push --force",
+    "git push -f",
+    "git push +",
+    "gh pr merge",
+    "gh release"
+  ],
+  "installs": [
+    { "dir": ".", "lockfile": "package-lock.json" },
+    { "dir": "web", "lockfile": "package-lock.json" },
+    { "dir": "studio", "lockfile": "package-lock.json" }
+  ],
+  "handoff": {
+    "version_file": "package.json",
+    "changelog": "CHANGELOG.md",
+    "section_heading": "## [{version}]",
+    "tag": "v{version}",
+    "tag_message": "v{version} — {subject}",
+    "merge_message": "{subject}",
+    "merge_command": "gh pr merge {pr} --squash --subject {merge_message}",
+    "green": ["npm run typecheck", "npm test", "npm run build"]
+  }
 }

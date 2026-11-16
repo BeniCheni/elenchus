@@ -33,9 +33,17 @@ export function ghApiArgs(apiPath: string, options?: GhGetOptions): string[] {
   return args;
 }
 
-export function runCommand(command: string, args: string[]): Promise<string> {
+export function runCommand(
+  command: string,
+  args: string[],
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let out = "";
     let err = "";
     child.stdout.setEncoding("utf8");

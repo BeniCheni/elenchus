@@ -46,13 +46,45 @@ export type SeatRecord = {
   verdict: string;
 };
 
-export type PassConfig = { id: string; role: string; seat: string };
+/** What `prep` creates for a pass. Absent on a configuration status and check can still read. */
+export type SeatKind = "writing" | "read-only" | "none";
+
+export type PassConfig = {
+  id: string;
+  role: string;
+  seat: string;
+  seat_kind?: SeatKind;
+  /** When true, check compares the record's coverage with the manifest at input_sha. */
+  coverage?: boolean;
+};
+
+export type InstallConfig = { dir: string; lockfile: string };
+
+export type HandoffConfig = {
+  version_file: string;
+  changelog: string;
+  /** Prefix of the changelog heading, with `{version}` filled from the version file. */
+  section_heading: string;
+  /** Annotated tag name, with `{version}` filled. */
+  tag: string;
+  /** Tag message, with `{version}` and `{subject}` filled. The subject is the changelog section's first sentence. */
+  tag_message: string;
+  /** Squash subject, with `{subject}` filled. */
+  merge_message: string;
+  /** Shell command, with `{pr}` and `{merge_message}` filled. */
+  merge_command: string;
+  green: string[];
+};
 
 export type VendorConfig = {
   authors: string[];
   runtimes: string[];
   models: Record<string, string[]>;
   efforts: Record<string, string[]>;
+  /** False for a vendor that must not hold a read-only seat (Cursor, S7). */
+  read_only_seat?: boolean;
+  /** Absolute path of the vendor binary, when it is not the command on PATH (Codex, S3). */
+  binary?: string;
 };
 
 export type Config = {
@@ -61,6 +93,10 @@ export type Config = {
   retry_cap: number;
   /** GitHub logins whose comments may carry seat records. */
   record_authors: string[];
+  /** Neutral command prefixes prep renders into each vendor's deny profile. */
+  forbidden?: string[];
+  installs?: InstallConfig[];
+  handoff?: HandoffConfig;
 };
 
 export type GhComment = {
@@ -78,10 +114,17 @@ export type GhCompareCommit = {
   commit?: { author?: GhCommitAuthor | null };
 };
 
+export type GhCompareFile = {
+  filename?: string;
+  previous_filename?: string;
+  status?: string;
+};
+
 export type GhCompare = {
   status: "ahead" | "behind" | "diverged" | "identical";
   total_commits?: number;
   commits?: GhCompareCommit[];
+  files?: GhCompareFile[];
 };
 
 export type GhPull = {
@@ -135,6 +178,8 @@ export type PassState = {
   outputIsAncestor: boolean | null;
   range: { commits: RangeCommit[]; error: string | null } | null;
   resolveError: string | null;
+  /** Set when the pass requires coverage and the record reported some. */
+  coverageManifest?: { paths: string[]; error: string | null };
 };
 
 export type Orphan = {

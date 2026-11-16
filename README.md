@@ -8,4 +8,8 @@ Sprint 1 is the read-only controller: `elenchus status` and `elenchus check`. A 
 
 `record_authors` in that file is the list of GitHub logins whose comments may carry records. A comment by any other login is ignored, and check prints a notice with the comment's URL and login. A record's `posted_by`, when it is present, must equal the comment author's login; check reports a mismatch under the rule `posted_by`. A configuration without `record_authors` is an error.
 
-Not in this sprint: preparing a seat, authorizing a merge, posting a status, tagging, or a pass value for the PM seat's re-read after the executor.
+`elenchus prep` makes a seat worktree for one pass: its own clone and install, a deny profile rendered from the configuration's command prefixes, a stamp of the route, and a coverage manifest. It reads GitHub through the same GET-only `gh` client and its git commands through a second wrapper that allows only what that work needs. `elenchus handoff` prints the release block and runs none of it. `elenchus check` adds a coverage rule for each pass the configuration marks: a record that omits coverage is unverified, and a record that reports it is checked against the manifest at that pass's `input_sha`.
+
+The fields `prep` reads — `seat_kind`, `coverage`, `read_only_seat`, `forbidden`, `installs`, `handoff`, and a vendor `binary` — are required only by the command that uses them. `status` and `check` still run when they are absent. A pass with no seat kind cannot be prepared. Cursor holds no read-only seat.
+
+Not in this sprint: authorizing a merge, posting a status, tagging, or a pass value for the PM seat's re-read after the executor.
