@@ -85,6 +85,15 @@ describe("status and check", () => {
     expect(thrice.check).toMatch(/FAIL retries pass 0 .*escalate to Beni/);
   });
 
+  it("reads comments in creation order when the array is not", async () => {
+    const bad = "```json\n{\"seat_record\":1,\"pass\":\"0\"}\n```\n";
+    const { check } = await review([
+      comment(2, fenced(seat({ pass: "0", retries: 1 })), "2026-11-14T00:00:02Z"),
+      comment(1, bad, "2026-11-14T00:00:01Z"),
+    ]);
+    expect(check).not.toMatch(/FAIL /);
+  });
+
   it("says when a record's retries field disagrees with the comments", async () => {
     const bad = "```json\n{\"seat_record\":1,\"pass\":\"0\"}\n```\n";
     const good = seat({ pass: "0", retries: 0 });
