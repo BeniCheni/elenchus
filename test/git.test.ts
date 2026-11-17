@@ -10,7 +10,8 @@ const seat = scope.places[1] ?? "";
 
 const allowed = [
   ["clone", "--bare", "https://github.com/BeniCheni/elenchus.git", cache],
-  ["clone", "--reference", cache, "--dissociate", "--branch", "feature", "/tmp/origin.git", seat],
+  ["clone", "--reference", cache, "--dissociate", "--no-checkout", "--branch", "feature", "/tmp/origin.git", seat],
+  ["-C", seat, "checkout", "--force", "HEAD"],
   ["-C", cache, "fetch", "origin", "+refs/heads/*:refs/heads/*"],
   ["-C", seat, "rev-parse", "HEAD"],
   ["-C", seat, "merge-base", "origin/main", "abc1234"],
@@ -57,6 +58,8 @@ const refused = [
   ["branch", "-D", "seat"],
   ["checkout", "main"],
   ["-C", seat, "config", "branch.feature.remote", "origin"],
+  ["clone", "--reference", cache, "--dissociate", "--branch", "feature", "/tmp/origin.git", seat],
+  ["-C", cache, "checkout", "--force", "HEAD"],
   ["-C", "/tmp/elenchus-root/stray", "status", "--porcelain"],
 ];
 

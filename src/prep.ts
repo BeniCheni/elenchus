@@ -145,11 +145,16 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
     "--reference",
     cache,
     "--dissociate",
+    "--no-checkout",
     "--branch",
     headRef,
     cloneUrl,
     seat,
   ]);
+  // Checking out during the clone reads the cache's commit-graph while the
+  // seat is still borrowing it, and that checkout fails. The seat has its own
+  // objects once clone returns.
+  await run("git", ["-C", seat, "checkout", "--force", "HEAD"]);
   const head = (await run("git", ["-C", seat, "rev-parse", "HEAD"])).trim();
   if (!sameSha(head, expected)) {
     throw new Error(`head ${head} is not the expected ${expected}`);

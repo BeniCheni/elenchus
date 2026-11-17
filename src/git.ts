@@ -22,15 +22,16 @@ function allowed(args: string[], scope: GitScope): boolean {
     return isToken(args[2]) && underRoot(scope, args[3]);
   }
   if (
-    args.length === 8 &&
+    args.length === 9 &&
     args[0] === "clone" &&
     args[1] === "--reference" &&
     args[3] === "--dissociate" &&
-    args[4] === "--branch" &&
-    isToken(args[5]) &&
-    isToken(args[6])
+    args[4] === "--no-checkout" &&
+    args[5] === "--branch" &&
+    isToken(args[6]) &&
+    isToken(args[7])
   ) {
-    return underRoot(scope, args[2]) && underRoot(scope, args[7]);
+    return underRoot(scope, args[2]) && underRoot(scope, args[8]);
   }
   if (args[0] !== "-C" || args.length < 3) return false;
   const place = args[1];
@@ -38,6 +39,7 @@ function allowed(args: string[], scope: GitScope): boolean {
   const rest = args.slice(2);
   if (same(rest, ["fetch", "origin", "+refs/heads/*:refs/heads/*"])) return true;
   if (same(rest, ["rev-parse", "HEAD"])) return true;
+  if (same(rest, ["checkout", "--force", "HEAD"])) return isSeat(scope, place);
   if (same(rest, ["status", "--porcelain"])) return true;
   if (rest.length === 3 && rest[0] === "merge-base" && isToken(rest[1]) && isToken(rest[2])) return true;
   if (
@@ -75,6 +77,11 @@ function underRoot(scope: GitScope, target: string | undefined): boolean {
   const root = path.resolve(scope.root);
   const resolved = path.resolve(target);
   return resolved === root || resolved.startsWith(`${root}${path.sep}`);
+}
+
+function isSeat(scope: GitScope, target: string): boolean {
+  const seat = scope.places[scope.places.length - 1];
+  return Boolean(seat) && scope.places.length > 1 && path.resolve(target) === path.resolve(seat);
 }
 
 function isPlace(scope: GitScope, target: string): boolean {
