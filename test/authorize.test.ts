@@ -36,6 +36,7 @@ function world(options: {
   head?: string;
   state?: string;
   repo?: string;
+  changedPath?: string;
 } = {}) {
   const configured = kickoffConfig();
   configured.passes = (options.allPasses ?? ["cold"]).map((id) => ({
@@ -45,7 +46,8 @@ function world(options: {
     configured.finding_flow = { opens: "cold", carries: ["reply", "synthesis"], ruling: "ruling" };
   } else delete configured.finding_flow;
   const gate = configured.gate!;
-  delete gate.allowed_changes;
+  if (options.changedPath) gate.allowed_changes!.reread_pass = "cold";
+  else delete gate.allowed_changes;
   gate.app_id = options.configAppId ?? appId;
   if (options.blockRoute) gate.blocking_unverified.push("route");
   const head = options.head ?? sha;
@@ -70,6 +72,15 @@ function world(options: {
           conclusion: options.run === "pending" ? null : options.run ?? "success",
           head_sha: head, app: { id: 15368 },
         }] };
+      }
+      if (options.changedPath && path.startsWith(`${root}/compare/${sha}...${head}`)) {
+        return { status: "ahead", total_commits: 1, commits: [{ sha: head, parents: [{ sha }] }] };
+      }
+      if (options.changedPath && path.startsWith(`${root}/git/trees/`)) {
+        return {
+          truncated: false,
+          tree: path.includes(head) ? [{ path: options.changedPath, sha: "1".repeat(40), mode: "100644", type: "blob" }] : [],
+        };
       }
       throw new Error(`unexpected GET ${path}`);
     },
@@ -210,4 +221,14 @@ describe("authorize with its real App client", () => {
     const resolved = await authorize(world({ allPasses, records: [...records, record("ruling")] }).gh, repo, 1, { dryRun: true });
     expect(resolved).toMatchObject({ ok: true, posted: false });
   });
+});
+
+it("authorizes an allowed docs commit without counting its classification notice as a blocker", async () => {
+  const head = "b".repeat(40);
+  expect(await authorize(world({ head, changedPath: "docs/release.md" }).gh, repo, 1, { dryRun: true }))
+    .toMatchObject({ ok: true, head });
+  expect(await authorize(world({ head, changedPath: "src/index.ts" }).gh, repo, 1, { dryRun: true }))
+    .toMatchObject({ ok: false, items: expect.arrayContaining([expect.objectContaining({
+      rule: "head", message: expect.stringContaining("needs a pass cold re-read"),
+    })]) });
 });

@@ -557,7 +557,9 @@ it("names a merged PR measured from the merge's first parent without range reads
   const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
   expect(state.baseSha).toBe(B);
   expect(formatStatus(buildStatus(state))).toContain(`merged: ${C}\n`);
+  for (const pass of state.config.passes) pass.coverage = true;
   expect(formatCheck(buildCheck(state))).toContain(`NOTICE merged pull request merged at ${C}`);
+  expect(formatCheck(buildCheck(state))).not.toContain("coverage");
   expect(calls.map(({ path }) => path)).not.toContain("/repos/BeniCheni/elenchus/commits/heads%2Freplay%2Fmain");
   expect(calls.some(({ path }) => path.includes("/compare/"))).toBe(false);
 });
@@ -573,4 +575,27 @@ it("uses encoded refs and avoids writing-pass ranges in status mode", async () =
   expect(calls.filter(({ path }) => path.includes("/compare/")).map(({ path }) => path)).toEqual([
     `/repos/BeniCheni/elenchus/compare/${B}...${C}`,
   ]);
+});
+
+it("reports that a pull request has no seat records", async () => {
+  const { check } = await review([]);
+  expect(check).toBe("NOTICE records no seat records\n");
+});
+
+it("carries findings across repository-defined pass ids", async () => {
+  const config = kickoffConfig();
+  config.passes = [
+    { id: "discover", role: "discover", seat: "reviewer" },
+    { id: "respond", role: "respond", seat: "builder" },
+  ];
+  config.finding_flow = { opens: "discover", carries: ["respond"] };
+  const gh = graphGh({
+    head: A, baseSha: A, nodes,
+    comments: [
+      comment(1, fenced(seat({ schema_version: "1.2", pass: "discover", findings: [{ id: "F9", severity: "low", status: "open" }] })), "2026-11-14T00:00:01Z"),
+      comment(2, fenced(seat({ schema_version: "1.2", pass: "respond", findings: [] })), "2026-11-14T00:00:02Z"),
+    ],
+  });
+  const state = await loadReview(gh, "BeniCheni/elenchus", 1, config);
+  expect(formatCheck(buildCheck(state))).toMatch(/FAIL finding-carry pass respond finding F9 .*opened in pass discover is missing/);
 });

@@ -97,3 +97,32 @@ describe("seat record schema v1.2", () => {
     expect(validateSeatRecord({ ...record, [field]: { requested: "high", observed: "high" } }).ok).toBe(true);
   });
 });
+
+describe("v1.2 closed object boundaries", () => {
+  const complete = {
+    ...v1,
+    schema_version: "1.2",
+    session: { id: "session", log: "metadata" },
+    mode: { requested: null, observed: null },
+    next_route: { runtime: "Codex", model: "gpt-6.1-sol", effort: "xhigh", recommended_by: null, confirmed_by: null },
+    coverage: { total: 2, reviewed: 1, reviewed_paths: ["a"], skipped: [{ path: "b", reason: "deleted" }] },
+  };
+  it.each([
+    [],
+    ["session"],
+    ["model"],
+    ["effort"],
+    ["mode"],
+    ["route"],
+    ["next_route"],
+    ["coverage"],
+    ["coverage", "skipped", "0"],
+    ["findings", "0"],
+  ])("rejects an extra property at %j", (...path) => {
+    const copy = structuredClone(complete);
+    let object = copy as unknown as Record<string, unknown>;
+    for (const part of path) object = object[part] as Record<string, unknown>;
+    object.unlisted = true;
+    expect(validateSeatRecord(copy).ok).toBe(false);
+  });
+});

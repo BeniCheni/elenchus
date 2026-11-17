@@ -9,6 +9,7 @@ import { comment, fenced, graphGh, kickoffConfig } from "./graph.js";
 const REVIEWED = "a".repeat(40);
 const HEAD = "b".repeat(40);
 const BASE = "c".repeat(40);
+const OFFBASE = "d".repeat(40);
 const sha = (text: string) => createHash("sha1").update(text).digest("hex");
 const record: SeatRecord = {
   seat_record: 1, schema_version: "1.2", pr: 1, pass: "finish", runtime: "Claude Code",
@@ -41,6 +42,7 @@ async function headCheck(options: {
   }), "2026-11-14T00:00:02Z"));
   const nodes = {
     [REVIEWED]: { parents: [], author: "Codex <noreply@openai.com>" },
+    [OFFBASE]: { parents: [REVIEWED], author: "Codex <noreply@openai.com>" },
     [BASE]: { parents: [REVIEWED], author: "Codex <noreply@openai.com>" },
     [HEAD]: { parents: [REVIEWED, ...(options.secondParent ? [options.secondParent] : [])], author: "Codex <noreply@openai.com>" },
   };
@@ -135,5 +137,35 @@ it("fails when the new head diverges or a paginated range is incomplete", async 
   });
   expect(await headCheck({ compare: { total_commits: 2 } })).toContainEqual({
     severity: "fail", rule: "head", message: expect.stringContaining("did not list every commit"),
+  });
+});
+
+it("requires version-only changes to occur in configured test paths", async () => {
+  expect(await headCheck({
+    before: { "package.json": '{"version":"1.0.0"}', "src/version.ts": '"1.0.0"' },
+    after: { "package.json": '{"version":"1.0.1"}', "src/version.ts": '"1.0.1"' },
+  })).toContainEqual({ severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read") });
+});
+
+it("requires an actual old and new version before classifying a test replacement", async () => {
+  for (const [before, after] of [
+    [{ "package.json": '{}', "test/version.test.ts": '"null"' }, { "package.json": '{"version":"1.0.1"}', "test/version.test.ts": '"1.0.1"' }],
+    [{ "package.json": '{"version":"1.0.0"}', "test/version.test.ts": '"1.0.0"' }, { "package.json": '{}', "test/version.test.ts": '"null"' }],
+  ]) {
+    expect(await headCheck({ before, after })).toContainEqual({
+      severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read"),
+    });
+  }
+});
+
+it("requires the second parent to be on the base even when every resulting blob matches", async () => {
+  expect(await headCheck({
+    before: { "src/deleted.ts": "remove" }, after: {}, secondParent: OFFBASE,
+  })).toContainEqual({ severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read") });
+});
+
+it.each([REVIEWED, HEAD])("refuses a truncated tree at %s", async (truncated) => {
+  expect(await headCheck({ after: { "docs/release.md": "ok" }, truncated })).toContainEqual({
+    severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read"),
   });
 });
