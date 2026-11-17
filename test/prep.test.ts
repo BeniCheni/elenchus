@@ -556,7 +556,7 @@ describe("prep refusals", () => {
     const made = origin();
     const root = path.join(made.dir, "seats");
     mkdirSync(path.join(root, "BeniCheni/elenchus/pr-3-pass-1"), { recursive: true });
-    mkdirSync(path.join(root, "BeniCheni/elenchus/pr-9-pass-0"), { recursive: true });
+    mkdirSync(path.join(root, "BeniCheni/elenchus/pr-9-pass-1.5"), { recursive: true });
     const report = await prep({
       head: made.second,
       url: made.url,
