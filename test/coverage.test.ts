@@ -1,8 +1,10 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../src/config.js";
 import { formatCheck } from "../src/format.js";
-import type { GhClient } from "../src/gh.js";
+import { recordingGh, type GhClient } from "../src/gh.js";
 import { loadReview } from "../src/load.js";
 import { buildCheck } from "../src/report.js";
 import type { GhCompare, SeatRecord } from "../src/types.js";
@@ -113,6 +115,21 @@ describe("coverage rule", () => {
     expect(blank).toMatch(new RegExp(`FAIL coverage pass 1 .*skipped ${month} has no reason`));
   });
 
+  it("fails a duplicate skipped path, and counts distinct paths", async () => {
+    const duplicated = {
+      ...matching,
+      skipped: [...matching.skipped, { path: month, reason: "deleted again" }],
+    };
+    const report = await check(duplicated);
+    expect(report).toMatch(new RegExp(`FAIL coverage pass 1 .*skipped ${month} is listed more than once`));
+    expect(report).not.toMatch(/reviewed 54 \+ skipped/);
+  });
+
+  it("fails when the reported total is not the manifest's size", async () => {
+    const report = await check({ ...matching, total: 999, reviewed: 996 });
+    expect(report).toMatch(/total 999 is not the manifest's 57/);
+  });
+
   it("leaves a marked record with no coverage unverified", async () => {
     const report = await check();
     expect(report).toMatch(/UNVERIFIED coverage pass 1 .*coverage not reported/);
@@ -152,5 +169,45 @@ describe("coverage rule", () => {
     const comments = [comment(1, fenced(seat({ pass: "0" })), "2026-11-14T00:00:01Z")];
     const state = await loadReview(graphGh({ head: A, baseSha: A, comments, nodes }), "BeniCheni/elenchus", 1, config);
     expect(formatCheck(buildCheck(state))).not.toMatch(/coverage/);
+  });
+
+  it("records a covered review and replays the same check", async () => {
+    const compared = [
+      { filename: "new.ts", status: "renamed", previous_filename: "old.ts", patch: `diff --git a/old.ts\n${"x".repeat(80)}` },
+      { filename: "keep.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b\n" },
+    ];
+    const coverage = { total: 3, reviewed: 3, skipped: [] as { path: string; reason: string }[] };
+    const comments = [
+      comment(1, fenced(seat({ pass: "0" })), "2026-11-14T00:00:01Z"),
+      comment(2, fenced(seat({ pass: "1", input_sha: B, output_sha: B, coverage })), "2026-11-14T00:00:02Z"),
+    ];
+    const inner = graphGh({ head: B, baseSha: A, comments, nodes });
+    const full: GhClient = {
+      async get(apiPath, options) {
+        const value = await inner.get(apiPath, options);
+        if (apiPath.includes("/compare/") && value && typeof value === "object") return { ...value, files: compared };
+        return value;
+      },
+    };
+    const dir = mkdtempSync(path.join(tmpdir(), "elenchus-record-"));
+    try {
+      const live = await loadReview(recordingGh(full, dir), "BeniCheni/elenchus", 1, kickoffConfig());
+      const liveReport = formatCheck(buildCheck(live));
+      const replay: GhClient = {
+        async get(apiPath) {
+          return JSON.parse(readFileSync(path.join(dir, `${encodeURIComponent(apiPath)}.json`), "utf8")) as unknown;
+        },
+      };
+      const again = await loadReview(replay, "BeniCheni/elenchus", 1, kickoffConfig());
+      expect(formatCheck(buildCheck(again))).toBe(liveReport);
+      expect(liveReport).not.toMatch(/FAIL coverage/);
+      const saved = readdirSync(dir)
+        .filter((name) => name.includes("compare"))
+        .map((name) => JSON.parse(readFileSync(path.join(dir, name), "utf8")) as { files?: Record<string, unknown>[] });
+      expect(saved.some((compare) => compare.files?.some((file) => file.previous_filename === "old.ts"))).toBe(true);
+      expect(saved.every((compare) => (compare.files ?? []).every((file) => !("patch" in file)))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

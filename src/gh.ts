@@ -87,11 +87,21 @@ export function recordingGh(inner: GhClient, dir: string): GhClient {
   };
 }
 
-/** Compare responses carry the whole diff. Records keep the fields the controller reads. */
+/** Compare responses carry the whole diff. Records keep each file's name, previous name and status. */
 function slimCompare(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const record = value as Record<string, unknown>;
-  if (!Array.isArray(record.commits) || !("files" in record)) return value;
-  const { files: _files, ...rest } = record;
-  return rest;
+  if (!Array.isArray(record.commits) || !Array.isArray(record.files)) return value;
+  return {
+    ...record,
+    files: record.files.map((file) => {
+      if (!file || typeof file !== "object") return file;
+      const raw = file as Record<string, unknown>;
+      const slim: Record<string, unknown> = {};
+      if ("filename" in raw) slim.filename = raw.filename;
+      if ("previous_filename" in raw) slim.previous_filename = raw.previous_filename;
+      if ("status" in raw) slim.status = raw.status;
+      return slim;
+    }),
+  };
 }

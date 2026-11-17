@@ -411,6 +411,7 @@ function checkCoverage(state: ReviewState, items: CheckItem[]): void {
       continue;
     }
     const coverage = record.coverage;
+    const seen = new Set<string>();
     for (const skip of coverage.skipped) {
       if (skip.reason.trim() === "") {
         items.push({
@@ -429,6 +430,16 @@ function checkCoverage(state: ReviewState, items: CheckItem[]): void {
           message: `skipped ${skip.path} is not in the manifest`,
         });
       }
+      if (seen.has(skip.path)) {
+        items.push({
+          severity: "fail",
+          rule: "coverage",
+          pass: pass.id,
+          comment: pass.outcome.commentUrl,
+          message: `skipped ${skip.path} is listed more than once`,
+        });
+      }
+      seen.add(skip.path);
     }
     if (coverage.total !== manifest.paths.length) {
       items.push({
@@ -439,14 +450,15 @@ function checkCoverage(state: ReviewState, items: CheckItem[]): void {
         message: `total ${coverage.total} is not the manifest's ${manifest.paths.length}`,
       });
     }
-    if (coverage.reviewed + coverage.skipped.length !== coverage.total) {
-      const notSkipped = manifest.paths.filter((file) => !coverage.skipped.some((skip) => skip.path === file));
+    const distinct = seen.size;
+    if (coverage.reviewed + distinct !== coverage.total) {
+      const notSkipped = manifest.paths.filter((file) => !seen.has(file));
       items.push({
         severity: "fail",
         rule: "coverage",
         pass: pass.id,
         comment: pass.outcome.commentUrl,
-        message: `reviewed ${coverage.reviewed} + skipped ${coverage.skipped.length} is not total ${coverage.total}; not skipped: ${notSkipped.join(", ")}`,
+        message: `reviewed ${coverage.reviewed} + skipped ${distinct} is not total ${coverage.total}; not skipped: ${notSkipped.join(", ")}`,
       });
     }
   }
