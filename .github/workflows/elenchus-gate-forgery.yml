@@ -20,3 +20,9 @@ jobs:
             -f state=success -f context=kickoff/360 \
             -f description='T7 GITHUB_TOKEN forgery probe' \
             -f target_url='https://github.com/BeniCheni/elenchus/pull/6'
+
+  fake-verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - run: printf 'Synthetic verify from the PR-added workflow\n'
