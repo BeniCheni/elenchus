@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { parseConfig } from "./config.js";
 import { formatCheck, formatStatus } from "./format.js";
+import { checkHead } from "./gate-review.js";
 import { buildHandoff } from "./handoff.js";
 import { cliGh, recordingGh } from "./gh.js";
 import { loadReview } from "./load.js";
@@ -138,7 +139,7 @@ async function main(argv: string[]): Promise<void> {
     process.stdout.write(flags.json ? `${JSON.stringify(view, null, 2)}\n` : formatStatus(view));
     return;
   }
-  const items = buildCheck(state);
+  const items = [...buildCheck(state), ...await checkHead(gh, state)];
   process.stdout.write(formatCheck(items));
   if (items.some((item) => item.severity === "fail")) process.exitCode = 1;
 }

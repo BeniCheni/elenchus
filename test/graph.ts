@@ -73,10 +73,11 @@ export function graphGh(input: {
     return {
       status,
       total_commits: shas.length,
+      base_commit: { sha: baseSha },
       merge_base_commit: { sha: [...fromHead].find((sha) => fromBase.has(sha)) ?? baseSha },
       commits: shas.map((sha) => {
         const [name, email] = splitAuthor(nodes[sha]?.author ?? " <");
-        return { sha, commit: { author: { name, email } } };
+        return { sha, parents: nodes[sha]?.parents.map((sha) => ({ sha })), commit: { author: { name, email } } };
       }),
     };
   };

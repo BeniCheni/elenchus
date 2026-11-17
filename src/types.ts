@@ -148,6 +148,7 @@ export type GhCommitAuthor = { name?: string | null; email?: string | null };
 
 export type GhCompareCommit = {
   sha: string;
+  parents?: { sha: string }[];
   commit?: { author?: GhCommitAuthor | null };
 };
 
@@ -160,6 +161,7 @@ export type GhCompareFile = {
 export type GhCompare = {
   status: "ahead" | "behind" | "diverged" | "identical";
   total_commits?: number;
+  base_commit?: { sha: string };
   merge_base_commit?: { sha: string };
   commits?: GhCompareCommit[];
   files?: GhCompareFile[];

@@ -320,7 +320,7 @@ async function attachGit(
     const hit = cache.get(`${spec}?per_page=100`) ?? cache.get(key);
     if (hit) return hit;
     try {
-      const value = (await gh.get(`/repos/${repo}/compare/${base}...${tip}`)) as GhCompare;
+      const value = (await gh.get(`/repos/${repo}/compare/${key}`, paginate ? { paginate: true } : undefined)) as GhCompare;
       cache.set(key, value);
       return value;
     } catch (error) {
@@ -419,31 +419,45 @@ async function seatRange(
   if (sameSha(record.input_sha, record.output_sha)) {
     return { commits: [], error: null };
   }
-  const result = await compare(record.input_sha, record.output_sha, true);
+  const inputIsBase = sameSha(baseSha, record.input_sha);
+  const result = await compare(record.input_sha, record.output_sha, inputIsBase);
   if (result.status !== "ahead") {
     return {
       commits: [],
       error: `input_sha ${record.input_sha} is not an ancestor of output_sha ${record.output_sha} (${result.status})`,
     };
   }
-  const commits = result.commits ?? [];
-  const total = result.total_commits ?? commits.length;
-  if (commits.length !== total) {
-    return { commits: [], error: `compare of ${record.input_sha}..${record.output_sha} was truncated (${commits.length} of ${total})` };
-  }
   if (sameSha(baseSha, record.output_sha)) return { commits: [], error: null };
-  const fromBase = sameSha(baseSha, record.input_sha) ? result : await compare(baseSha, record.output_sha, true);
-  const unique = fromBase.commits ?? [];
-  if (fromBase.total_commits !== undefined && fromBase.total_commits !== unique.length) {
+  const fromBase = inputIsBase ? result : await compare(baseSha, record.output_sha, true);
+  const commits = fromBase.commits ?? [];
+  if (fromBase.total_commits !== commits.length) {
     return { commits: [], error: `compare of base ${baseSha} to ${record.output_sha} was truncated` };
   }
-  const outsideBase = new Set(unique.map((commit) => commit.sha));
-  const kept: RangeCommit[] = [];
-  for (const commit of commits) {
-    if (!outsideBase.has(commit.sha)) continue;
-    const name = commit.commit?.author?.name ?? "";
-    const email = commit.commit?.author?.email ?? "";
-    kept.push({ sha: commit.sha, author: `${name} <${email}>` });
+  // The paginated comparison contains every commit outside the base. Walk only
+  // in that graph to remove commits already present at the input.
+  const bySha = new Map(commits.map((commit) => [commit.sha, commit]));
+  const canonicalInput = result.base_commit?.sha;
+  const input = canonicalInput
+    ? bySha.get(canonicalInput)
+    : commits.find(({ sha }) => sameSha(record.input_sha, sha));
+  const stack = input ? [input.sha] : [];
+  const beforeInput = new Set<string>();
+  while (stack.length > 0) {
+    const sha = stack.pop()!;
+    if (beforeInput.has(sha)) continue;
+    const commit = bySha.get(sha);
+    if (!commit) continue;
+    if (!commit.parents) return { commits: [], error: `compare omitted parents of ${sha}` };
+    beforeInput.add(sha);
+    stack.push(...commit.parents.map((parent) => parent.sha));
   }
-  return { commits: kept, error: null };
+
+  return {
+    commits: commits.filter(({ sha }) => !beforeInput.has(sha)).map((commit) => {
+      const name = commit.commit?.author?.name ?? "";
+      const email = commit.commit?.author?.email ?? "";
+      return { sha: commit.sha, author: `${name} <${email}>` };
+    }),
+    error: null,
+  };
 }

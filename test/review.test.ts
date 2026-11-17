@@ -217,6 +217,9 @@ describe("status and check", () => {
     expect(state.baseSha).toBe(B);
     expect(check).not.toMatch(/FAIL /);
     expect(calls.some((call) => call.path.endsWith("/commits/heads%2Freplay%2Fmain"))).toBe(true);
+    expect(calls.filter((call) => call.path.includes("/compare/") && call.paginate)).toEqual([
+      { path: `/repos/BeniCheni/elenchus/compare/${B}...${C}?per_page=100`, paginate: true },
+    ]);
   });
 
   it("drops commits reachable from the base branch before the author check", async () => {
