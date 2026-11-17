@@ -14,6 +14,7 @@ import type {
   Notice,
   PassState,
   RangeCommit,
+  RecordedPosting,
   ReviewState,
   SeatRecord,
   Unreadable,
@@ -36,9 +37,10 @@ export async function loadReview(
   const orphans = attempts
     .filter((attempt) => attempt.pass === null || !known.has(attempt.pass))
     .map((attempt) => ({
+      rule: attempt.valid ? "pass" as const : "schema" as const,
       pass: attempt.pass,
       commentUrl: attempt.commentUrl,
-      reason: attempt.reason ?? "malformed record",
+      reason: attempt.reason ?? `pass ${attempt.pass} is not configured`,
     }));
   const passes = config.passes.map((pass) => passState(pass, attempts.filter((attempt) => attempt.pass === pass.id)));
   const compared = await attachGit(gh, repo, pull.head.sha, baseTip.sha, passes, config);
@@ -79,6 +81,7 @@ function parseAttempts(
 ): { attempts: Attempt[]; notices: Notice[]; unreadable: UnreadableEvent[] } {
   const ordered = [...comments].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
   const attempts: Attempt[] = [];
+  const latestByPass = new Map<string, SeatRecord>();
   const notices: Notice[] = [];
   const unreadable: UnreadableEvent[] = [];
   for (const comment of ordered) {
@@ -125,22 +128,36 @@ function parseAttempts(
     }
     const result = validateSeatRecord(value);
     const pass = passField(value);
-    if (pass !== null && known.has(pass)) {
+    if (pass !== null && (known.has(pass) || result.ok)) {
+      const record = result.ok ? result.record : null;
+      const prior = latestByPass.get(pass);
+      const reason = record ? rereadError(record, prior) : (result.ok ? null : result.reason);
+      if (record && reason === null) latestByPass.set(pass, record);
       attempts.push({
         pass,
         commentUrl: comment.html_url,
         createdAt: comment.created_at,
         id: comment.id,
         authorLogin: comment.user?.login ?? "",
-        valid: result.ok,
-        reason: result.ok ? null : result.reason,
-        record: result.ok ? result.record : null,
+        valid: reason === null,
+        reason,
+        record: reason === null ? record : null,
       });
       continue;
     }
     countUnreadable(unreadable, attempts, config, comment, result.ok ? "pass cannot be read" : result.reason);
   }
   return { attempts, notices, unreadable };
+}
+
+function rereadError(record: SeatRecord, prior: SeatRecord | null | undefined): string | null {
+  if (record.reread) {
+    if (!prior) return "a re-read requires an earlier record for this pass";
+    if (sameSha(prior.output_sha, record.output_sha)) return "a re-read requires a later output_sha";
+  } else if (prior && (record.schema_version === "1.2" || prior.schema_version === "1.2")) {
+    return "a repeat of this pass must be marked as a re-read";
+  }
+  return null;
 }
 
 function failedAttempt(comment: GhComment, pass: string, reason: string): Attempt {
@@ -200,7 +217,9 @@ function listedUnreadable(events: UnreadableEvent[], passes: PassState[]): Unrea
 
 function passState(pass: { id: string; role: string; seat: string }, attempts: Attempt[]): PassState {
   const base = { id: pass.id, role: pass.role, seat: pass.seat, outputIsAncestor: null, range: null, resolveError: null };
-  const valid = attempts.filter((attempt) => attempt.valid && attempt.record);
+  const valid = attempts.filter(
+    (attempt): attempt is Attempt & { record: SeatRecord } => attempt.valid && attempt.record !== null,
+  );
   const chosen = valid[valid.length - 1];
   if (chosen?.record) {
     const priorFailures = attempts.filter((attempt) => !attempt.valid && isBefore(attempt, chosen)).length;
@@ -214,6 +233,7 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
         record: chosen.record,
         commentUrl: chosen.commentUrl,
         authorLogin: chosen.authorLogin,
+        history: recordHistory(valid),
         priorFailures,
         laterRejections,
       },
@@ -231,6 +251,22 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
       failures,
     },
   };
+}
+
+function recordHistory(valid: RecordedPosting[]): RecordedPosting[] {
+  const firstReread = valid.findIndex(({ record }) => record.reread);
+  // With no re-read, retain the last update just as legacy records have always done.
+  return valid.slice(firstReread === -1 ? -1 : firstReread - 1);
+}
+
+export function postingOrder(a: RecordedPosting, b: RecordedPosting): number {
+  return a.createdAt.localeCompare(b.createdAt) || a.id - b.id;
+}
+
+export function recordTimeline(passes: PassState[]): RecordedPosting[] {
+  return passes
+    .flatMap(({ outcome }) => outcome.kind === "recorded" ? outcome.history : [])
+    .sort(postingOrder);
 }
 
 function isBefore(attempt: Attempt, other: Attempt): boolean {
@@ -273,6 +309,7 @@ async function attachGit(
     return result.status === "ahead" || result.status === "identical";
   };
 
+  const timeline = recordTimeline(passes);
   const next: PassState[] = [];
   for (const pass of passes) {
     if (pass.outcome.kind !== "recorded") {
@@ -280,12 +317,16 @@ async function attachGit(
       continue;
     }
     const record = pass.outcome.record;
-    const wantsManifest = config.passes.find((item) => item.id === pass.id)?.coverage === true && record.coverage !== undefined;
+    const wantsManifest = record.coverage !== undefined && (
+      config.passes.find((item) => item.id === pass.id)?.coverage === true ||
+      record.coverage.reviewed_paths !== undefined
+    );
     try {
+      const resolveError = await rereadChainError(pass.outcome.history, timeline, isAncestorOrEqual);
       const outputIsAncestor = await isAncestorOrEqual(record.output_sha, head);
       const range = await seatRange(record, baseSha, compare, isAncestorOrEqual);
       const coverageManifest = wantsManifest ? manifestFromCompare(await compare(baseSha, record.input_sha)) : undefined;
-      next.push({ ...pass, outputIsAncestor, range, ...(coverageManifest ? { coverageManifest } : {}) });
+      next.push({ ...pass, resolveError, outputIsAncestor, range, ...(coverageManifest ? { coverageManifest } : {}) });
     } catch (error) {
       if (!(error instanceof UnresolvedSha)) throw error;
       const coverageManifest = wantsManifest ? { paths: [], error: error.message } : undefined;
@@ -320,6 +361,26 @@ async function attachGit(
     }
   }
   return { passes: next, inProgressPass };
+}
+
+async function rereadChainError(
+  history: RecordedPosting[],
+  timeline: RecordedPosting[],
+  isAncestorOrEqual: (ancestor: string, descendant: string) => Promise<boolean>,
+): Promise<string | null> {
+  for (const [index, posting] of history.entries()) {
+    if (!posting.record.reread) continue;
+    const prior = history[index - 1]!.record.output_sha;
+    const { input_sha: input, output_sha: output } = posting.record;
+    if (!await isAncestorOrEqual(prior, output)) {
+      return `re-read output_sha ${output} does not advance from ${prior}`;
+    }
+    const previous = timeline[timeline.indexOf(posting) - 1]!.record.output_sha;
+    if (!await isAncestorOrEqual(previous, input)) {
+      return `re-read input_sha ${input} does not continue from ${previous}`;
+    }
+  }
+  return null;
 }
 
 async function seatRange(

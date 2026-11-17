@@ -450,3 +450,51 @@ describe("unresolvable SHAs", () => {
     expect(check).toMatch(/FAIL sha-chain pass 0 .* cannot resolve /);
   });
 });
+
+describe("v1.2 passes and re-reads", () => {
+  const config = kickoffConfig();
+  config.passes = [
+    { id: "cold", role: "cold", seat: "reviewer" },
+    { id: "finish", role: "finish", seat: "reviewer" },
+  ];
+  const modern = (pass: string, sha: string, fields: Partial<SeatRecord> = {}) => seat({
+    schema_version: "1.2", pr: 1, pass, input_sha: sha, output_sha: sha, ...fields,
+  });
+  const verify = async (records: SeatRecord[], head = B) => {
+    const gh = graphGh({
+      head, baseSha: A, nodes,
+      comments: records.map((record, i) => comment(i + 1, fenced(record), `2026-11-14T00:00:0${i}Z`)),
+    });
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, config);
+    return { check: formatCheck(buildCheck(state)), status: formatStatus(buildStatus(state)) };
+  };
+
+  it("names an unconfigured pass", async () => {
+    const { check } = await verify([modern("extra", A)]);
+    expect(check).toMatch(/FAIL pass pass extra .*not configured/);
+  });
+
+  it("links a read-only pass to its predecessor's output", async () => {
+    const { check } = await verify([modern("cold", B), modern("finish", A)]);
+    expect(check).toMatch(/FAIL sha-chain pass finish .*previous pass cold/);
+  });
+
+  it("accepts a later re-read of an earlier pass and checks its route in place of the original", async () => {
+    const original = modern("cold", A, { model: { requested: "Fable 5.2", observed: "other" } });
+    const { check, status } = await verify([original, modern("finish", A), modern("cold", B, { reread: true })]);
+    expect(check).toBe("ok\n");
+    expect(status).toContain("issuecomment-3");
+    expect(status).toContain(`head equals last output_sha ${B}`);
+  });
+
+  it.each([
+    { records: [modern("cold", B, { reread: true })], error: /requires an earlier record/ },
+    { records: [modern("cold", A), modern("cold", A, { reread: true })], error: /requires a later output_sha/ },
+    { records: [modern("cold", A), modern("cold", B)], error: /must be marked as a re-read/ },
+    { records: [modern("cold", B), modern("cold", A, { reread: true })], error: /does not advance from/ },
+    { records: [modern("cold", A), modern("finish", C), modern("cold", B, { reread: true })], error: /does not continue from/ },
+  ])("fails invalid re-read chains %#", async ({ records, error }) => {
+    const { check } = await verify(records, C);
+    expect(check).toMatch(error);
+  });
+});

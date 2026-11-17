@@ -766,3 +766,37 @@ describe("prep refusals", () => {
     }
   });
 });
+
+it("uses the preceding record's confirmed route with per-field flag overrides", async () => {
+  const made = origin();
+  const root = path.join(made.dir, "seats");
+  const report = await prepareSeat({
+    gh: client(made.second, [{
+      ...seat("0", made.second),
+      schema_version: "1.2",
+      next_route: {
+        runtime: "Claude Code",
+        model: "claude-fable-5-2",
+        effort: "medium",
+        recommended_by: "planner",
+        confirmed_by: "maintainer",
+      },
+    }]),
+    repo: "BeniCheni/elenchus",
+    pr: 3,
+    pass: "1",
+    runtime: "",
+    model: "",
+    effort: "high",
+    confirmedBy: "",
+    root,
+    config: config(),
+    cloneUrl: made.url,
+    run: runner(root),
+  });
+  expect(report.launch).toContain("claude --model 'claude-fable-5-2' --effort 'high'");
+  expect(JSON.parse(readFileSync(report.stamp, "utf8"))).toMatchObject({
+    runtime: "Claude Code", recommended_by: "planner", confirmed_by: "maintainer",
+    route_source: { runtime: "record", model: "record", effort: "flag", confirmed_by: "record" },
+  });
+});

@@ -50,12 +50,12 @@ const finding = { id: "7", severity: "low", status: "open" as const };
 const killed = { id: "7", severity: "low", status: "killed" as const };
 
 describe("failing cases for rules the suite used to miss", () => {
-  it("fails when a writing pass's input_sha is not the previous writing pass's output_sha", async () => {
+  it("fails when a writing pass's input_sha is not the previous pass's output_sha", async () => {
     const { check } = await report([
       comment(1, fenced(seat({ pass: "0", input_sha: A, output_sha: B, commits: [B] })), "2026-11-14T00:00:01Z"),
       comment(2, fenced(seat({ pass: "1", input_sha: A, output_sha: C, commits: [B, C] })), "2026-11-14T00:00:02Z"),
     ], C, A);
-    expect(check).toMatch(/FAIL sha-chain pass 1 .*input_sha .* is not the previous writing pass 0's output_sha/);
+    expect(check).toMatch(/FAIL sha-chain pass 1 .*input_sha .* is not the previous pass 0's output_sha/);
   });
 
   it("fails when output_sha is not an ancestor of the head", async () => {

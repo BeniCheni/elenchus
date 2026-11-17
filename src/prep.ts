@@ -4,7 +4,8 @@ import path from "node:path";
 import type { GhClient } from "./gh.js";
 import { runCommand } from "./gh.js";
 import { assertGitAllowed, type GitScope } from "./git.js";
-import { loadReview } from "./load.js";
+import { vendorForRuntime } from "./config.js";
+import { loadReview, recordTimeline } from "./load.js";
 import { manifestFromNameStatus, type ManifestPath } from "./manifest.js";
 import { CODEX_PROFILE_LOADS, codexTrustConfig, profilePath, renderProfile, type VendorName } from "./profile.js";
 import { shellQuote } from "./quote.js";
@@ -73,7 +74,7 @@ export function cachePath(root: string, repo: string): string {
 }
 
 export function seatPath(root: string, repo: string, pr: number, pass: string): string {
-  return path.join(root, repo, `pr-${pr}-pass-${pass}`);
+  return path.join(root, repo, `pr-${pr}-pass-${encodeURIComponent(pass)}`);
 }
 
 export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
@@ -103,26 +104,34 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   if (gap) lines.push(`no valid record for pass ${gap}`);
   if (lines.length > 0) throw new Error(lines.join("\n"));
 
-  if (!request.runtime || !request.model || !request.effort || !request.confirmedBy) {
-    throw new Error("prep requires --runtime, --model, --effort and --confirmed-by");
+  const passIndex = state.passes.indexOf(pass);
+  const previous = state.passes[passIndex - 1]?.outcome;
+  const nextRoute = previous?.kind === "recorded" ? previous.record.next_route : undefined;
+  const runtimeChoice = request.runtime || nextRoute?.runtime;
+  const model = request.model || nextRoute?.model;
+  const effort = request.effort || nextRoute?.effort;
+  const confirmedBy = request.confirmedBy || nextRoute?.confirmed_by;
+  if (!runtimeChoice || !model || !effort || !confirmedBy) {
+    throw new Error("prep requires --runtime, --model, --effort and --confirmed-by or a confirmed next_route");
   }
-  const vendorName = vendorNameOf(request.runtime);
+  const vendorName = vendorNameOf(vendorForRuntime(state.config, runtimeChoice)?.name ?? runtimeChoice);
   const vendor = state.config.vendors[vendorName];
-  if (!vendor) throw new Error(`runtime ${request.runtime} is not a configured vendor`);
-  if (!Object.hasOwn(vendor.models, request.model)) {
-    throw new Error(`model ${request.model} is not in the ${request.runtime} table`);
+  if (!vendor) throw new Error(`runtime ${runtimeChoice} is not a configured vendor`);
+  const runtime = vendor.runtimes.includes(runtimeChoice) ? runtimeChoice : runtimeName(vendorName, vendor);
+  if (!Object.hasOwn(vendor.models, model)) {
+    throw new Error(`model ${model} is not in the ${runtimeChoice} table`);
   }
-  if (!Object.hasOwn(vendor.efforts, request.effort)) {
-    throw new Error(`effort ${request.effort} is not in the ${request.runtime} table`);
+  if (!Object.hasOwn(vendor.efforts, effort)) {
+    throw new Error(`effort ${effort} is not in the ${runtimeChoice} table`);
   }
   if (vendorName === "cursor") {
-    const suffix = request.model.slice(request.model.lastIndexOf("-") + 1);
-    if (suffix !== request.effort) {
-      throw new Error(`cursor effort is the model id suffix: ${request.model} is not ${request.effort}`);
+    const suffix = model.slice(model.lastIndexOf("-") + 1);
+    if (suffix !== effort) {
+      throw new Error(`cursor effort is the model id suffix: ${model} is not ${effort}`);
     }
   }
   if (seatKind === "read-only" && vendor.read_only_seat !== true) {
-    throw new Error(`${request.runtime} may not hold a read-only seat`);
+    throw new Error(`${runtimeChoice} may not hold a read-only seat`);
   }
 
   const expected = expectedSha(state, request.pass);
@@ -160,16 +169,22 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
     throw new Error(`head ${head} is not the expected ${expected}`);
   }
 
-  const runtime = runtimeName(vendorName, vendor);
   const stampBody = `${JSON.stringify(
     {
       pr: request.pr,
       pass: request.pass,
       expected_sha: head,
       runtime,
-      model: request.model,
-      effort: request.effort,
-      confirmed_by: request.confirmedBy,
+      model,
+      effort,
+      recommended_by: nextRoute?.recommended_by ?? null,
+      confirmed_by: confirmedBy,
+      route_source: {
+        runtime: request.runtime ? "flag" : "record",
+        model: request.model ? "flag" : "record",
+        effort: request.effort ? "flag" : "record",
+        confirmed_by: request.confirmedBy ? "flag" : "record",
+      },
       by_hand: true,
     },
     null,
@@ -183,7 +198,7 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
 
   const installed = await installSeat(seat, installs, run);
   await assertSymlinksInside(seat);
-  const launch = launchLine(seat, vendorName, request.model, request.effort, seatKind, vendor.binary);
+  const launch = launchLine(seat, vendorName, model, effort, seatKind, vendor.binary);
   const mergeBase = (await run("git", ["-C", seat, "merge-base", `origin/${state.baseRef}`, head])).trim();
   const nameStatus = await run("git", [
     "-C",
@@ -346,11 +361,11 @@ function runtimeName(vendor: VendorName, configured: VendorConfig): string {
 function expectedSha(state: ReviewState, passId: string): string {
   const index = state.passes.findIndex((pass) => pass.id === passId);
   if (index === 0) return state.head;
-  const previous = [...state.passes.slice(0, index)].reverse().find((pass) => pass.outcome.kind === "recorded");
-  if (!previous || previous.outcome.kind !== "recorded") {
+  const previous = recordTimeline(state.passes.slice(0, index)).at(-1);
+  if (!previous) {
     throw new Error(`pass ${passId} has no previous record to take a SHA from`);
   }
-  return previous.outcome.record.output_sha;
+  return previous.record.output_sha;
 }
 
 /**
@@ -382,10 +397,9 @@ async function openSeats(root: string, state: ReviewState): Promise<{ pass: stri
   const found: { pass: string; seat: string }[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
-    const passId = entry.name.slice(prefix.length);
-    const pass = state.passes.find((item) => item.id === passId);
+    const pass = state.passes.find((item) => `${prefix}${encodeURIComponent(item.id)}` === entry.name);
     if (!pass || pass.outcome.kind === "recorded") continue;
-    found.push({ pass: passId, seat: path.join(repoDir, entry.name) });
+    found.push({ pass: pass.id, seat: path.join(repoDir, entry.name) });
   }
   return found;
 }

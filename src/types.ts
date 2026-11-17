@@ -16,8 +16,19 @@ export type Finding = {
   category?: string;
 };
 
+export type NextRoute = {
+  runtime: string;
+  model: string;
+  effort: string;
+  recommended_by: string | null;
+  confirmed_by: string | null;
+};
+
 export type SeatRecord = {
   seat_record: 1;
+  schema_version?: "1.2";
+  reread?: true;
+  next_route?: NextRoute;
   pr: number;
   pass: string;
   runtime: string;
@@ -39,6 +50,7 @@ export type SeatRecord = {
   coverage?: {
     total: number;
     reviewed: number;
+    reviewed_paths?: string[];
     skipped: { path: string; reason: string }[];
   };
   not_verified?: string[];
@@ -153,6 +165,13 @@ export type LaterRejection = { commentUrl: string; reason: string };
 
 export type Unreadable = { commentUrl: string; reason: string; attached: boolean };
 
+export type RecordedPosting = {
+  record: SeatRecord;
+  commentUrl: string;
+  createdAt: string;
+  id: number;
+};
+
 export type PassOutcome =
   | { kind: "absent" }
   | {
@@ -160,6 +179,7 @@ export type PassOutcome =
       record: SeatRecord;
       commentUrl: string;
       authorLogin: string;
+      history: RecordedPosting[];
       priorFailures: number;
       laterRejections: LaterRejection[];
     }
@@ -183,6 +203,7 @@ export type PassState = {
 };
 
 export type Orphan = {
+  rule: "schema" | "pass";
   pass: string | null;
   commentUrl: string;
   reason: string;

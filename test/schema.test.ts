@@ -58,3 +58,42 @@ describe("seat record schema v1.1", () => {
     expect(validateSeatRecord({ ...v1, input_sha: "abc1234" }).ok).toBe(true);
   });
 });
+
+describe("seat record schema v1.2", () => {
+  const record = {
+    ...v1,
+    schema_version: "1.2",
+    pass: "independent synthesis",
+    reread: true,
+    next_route: {
+      runtime: "Codex", model: "gpt-6.1-sol", effort: "xhigh", recommended_by: "lead", confirmed_by: "maintainer",
+    },
+    model: { requested: "model", observed: null, source: "not reported" },
+    effort: { requested: "high", observed: null, source: "not reported" },
+    coverage: { total: 1, reviewed: 1, skipped: [], reviewed_paths: ["src/a.ts"] },
+  };
+
+  it("accepts repository-defined passes, a re-read, a handoff route and named paths", () => {
+    expect(validateSeatRecord(record).ok).toBe(true);
+  });
+
+  it.each([
+    { schema_version: "1.3" },
+    { pass: "" },
+    { reread: false },
+    { extra: true },
+    { next_route: { ...record.next_route, extra: true } },
+    { next_route: { ...record.next_route, confirmed_by: undefined } },
+    { coverage: { ...record.coverage, extra: true } },
+    { coverage: { ...record.coverage, reviewed_paths: ["src/a.ts", "src/a.ts"] } },
+  ])("rejects an invalid or unknown field: %j", (change) => {
+    expect(validateSeatRecord({ ...record, ...change }).ok).toBe(false);
+  });
+
+  it.each(["model", "effort"] as const)("validates the requested and observed %s independently", (field) => {
+    expect(validateSeatRecord({ ...record, [field]: { ...record[field], requested: null } }).ok).toBe(false);
+    expect(validateSeatRecord({ ...record, [field]: { ...record[field], source: undefined } }).ok).toBe(false);
+    expect(validateSeatRecord({ ...record, [field]: { ...record[field], source: "" } }).ok).toBe(false);
+    expect(validateSeatRecord({ ...record, [field]: { requested: "high", observed: "high" } }).ok).toBe(true);
+  });
+});

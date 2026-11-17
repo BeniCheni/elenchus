@@ -211,3 +211,29 @@ describe("coverage rule", () => {
     }
   });
 });
+
+it("holds v1.2 reviewed paths to the manifest independently of the numerical totals", async () => {
+  const manifest = [{ status: "added", filename: "added" }, { status: "removed", filename: "deleted" }];
+  const capture = async (reviewed_paths: string[]) => {
+    const records = [
+      seat({ pass: "0", input_sha: B, output_sha: B, schema_version: "1.2", coverage: {
+        total: 2, reviewed: 1, skipped: [{ path: "deleted", reason: "deleted" }], reviewed_paths,
+      } }),
+    ];
+    const inner = graphGh({ head: B, baseSha: A, comments: [comment(1, fenced(records[0]), "2026-11-14T00:00:01Z")], nodes });
+    const gh: GhClient = {
+      async get(apiPath, options) {
+        const value = await inner.get(apiPath, options);
+        return apiPath.includes("/compare/") ? { ...(value as GhCompare), files: manifest } : value;
+      },
+    };
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
+    return formatCheck(buildCheck(state));
+  };
+
+  expect(await capture(["added"])).toBe("ok\n");
+  expect(await capture(["deleted"])).toMatch(/deleted is both reviewed and skipped/);
+  expect(await capture(["elsewhere"])).toMatch(/reviewed elsewhere is not in the manifest/);
+  expect(await capture(["deleted"])).toMatch(/added is missing from reviewed and skipped paths/);
+  expect(await capture([])).toMatch(/reviewed 1 is not the number of reviewed paths 0/);
+});

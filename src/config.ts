@@ -11,7 +11,7 @@ export function parseConfig(value: unknown): Config {
   const passes = raw.passes.map((entry, index) => {
     if (!entry || typeof entry !== "object") throw new Error(`config.passes[${index}] is not an object`);
     const pass = entry as Record<string, unknown>;
-    if (typeof pass.id !== "string" || typeof pass.role !== "string" || typeof pass.seat !== "string") {
+    if (typeof pass.id !== "string" || pass.id.length === 0 || typeof pass.role !== "string" || typeof pass.seat !== "string") {
       throw new Error(`config.passes[${index}] needs id, role and seat`);
     }
     const seatKind = optionalSeatKind(pass.seat_kind, `config.passes[${index}].seat_kind`);
@@ -24,6 +24,9 @@ export function parseConfig(value: unknown): Config {
       ...(coverage !== undefined ? { coverage } : {}),
     };
   });
+  if (new Set(passes.map((pass) => pass.id)).size !== passes.length) {
+    throw new Error("config.passes must have distinct ids");
+  }
   if (typeof raw.retry_cap !== "number" || !Number.isInteger(raw.retry_cap) || raw.retry_cap < 0) {
     throw new Error("config.retry_cap must be a non-negative integer");
   }
