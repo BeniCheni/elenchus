@@ -26,3 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: printf 'Synthetic verify from the PR-added workflow\n'
+
+  environment-probe:
+    runs-on: ubuntu-latest
+    environment: gate-test
+    steps:
+      - name: Read the dummy secret if the branch policy permits the job
+        env:
+          DUMMY_VALUE: ${{ secrets.ELENCHUS_GATE_TEST_DUMMY }}
+        run: test -n "$DUMMY_VALUE"
