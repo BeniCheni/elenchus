@@ -1,38 +1,41 @@
 import { expect, it } from "vitest";
 import { readGateStatus } from "../src/gate-status.js";
 
-it("names no status, a matching App and the non-counting statuses by creator", async () => {
-  const gate = { context: "review/ready", app_id: 42, required_checks: [], blocking_unverified: [] };
-  const make = (login: string, type: string) => ({
-    context: gate.context, state: "success", creator: { login, type },
-  });
-  const statuses: object[] = [{ ...make("unrelated", "User"), context: "other" }];
-  const gh = {
-    async get(path: string) {
-      if (path.includes("/statuses?")) return statuses;
-      if (path === "/apps/controller") return { id: 42 };
-      if (path === "/apps/other") return { id: 5 };
-      throw new Error(`unexpected ${path}`);
+const gate = { context: "review/ready", app_id: 42, required_checks: [], blocking_unverified: [] };
+const head = "a".repeat(40);
+const limitation = "; source UNVERIFIED because GitHub's status API does not report which App posted it; the review gate's ruleset decides whether it counts";
+
+function statusesOnly(statuses: object[]) {
+  return {
+    async get(path: string, options?: { paginate?: boolean }) {
+      expect(path).toBe(`/repos/team/repo/commits/${head}/statuses?per_page=100`);
+      expect(options).toEqual({ paginate: true });
+      return statuses;
     },
   };
-  const head = "a".repeat(40);
-  expect(await readGateStatus(gh, "team/repo", head, gate)).toBe("no status");
-  statuses.push(make("admin", "User"), make("other[bot]", "Bot"), make("controller[bot]", "Bot"));
-  expect(await readGateStatus(gh, "team/repo", head, gate)).toBe(
-    "success by controller[bot] (App 42), success by admin (does not count), success by other[bot] (does not count)",
+}
+
+it("names no status when the configured context is absent", async () => {
+  expect(await readGateStatus(statusesOnly([]), "team/repo", head, gate)).toBe("no status");
+  expect(await readGateStatus(statusesOnly([
+    { context: "other", state: "success", creator: { login: "admin", type: "User" } },
+  ]), "team/repo", head, gate)).toBe("no status");
+});
+
+it("names every matching status's state and creator without inferring its App integration", async () => {
+  const statuses = [
+    { context: "REVIEW/READY", state: "success", creator: { login: "controller[bot]", type: "Bot" } },
+    { context: gate.context, state: "failure", creator: { login: "admin", type: "User" } },
+    { context: gate.context, state: "pending", creator: { login: "controller[bot]", type: "Bot" } },
+    { context: "other", state: "success", creator: { login: "unrelated", type: "User" } },
+  ];
+  expect(await readGateStatus(statusesOnly(statuses), "team/repo", head, gate)).toBe(
+    "success by controller[bot] (Bot), failure by admin (User), pending by controller[bot] (Bot)" + limitation,
   );
 });
 
-it("reports a private App's inaccessible metadata as unverified", async () => {
-  const gh = {
-    async get(path: string) {
-      if (path.includes("/statuses?")) return [{
-        context: "review/ready", state: "success", creator: { login: "private-controller[bot]", type: "Bot" },
-      }];
-      throw new Error("gh: Not Found (HTTP 404)");
-    },
-  };
-  expect(await readGateStatus(gh, "team/repo", "a".repeat(40), {
-    context: "review/ready", app_id: 42, required_checks: [], blocking_unverified: [],
-  })).toBe("success by private-controller[bot] (source UNVERIFIED; App metadata unavailable)");
+it("keeps absent creator metadata unverified", async () => {
+  expect(await readGateStatus(statusesOnly([
+    { context: gate.context, state: "error" },
+  ]), "team/repo", head, gate)).toBe("error by unknown (unknown)" + limitation);
 });

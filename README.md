@@ -125,9 +125,12 @@ available, and range rules are skipped. A comparison with 300 or more files uses
 base's and input commit's recursive trees to reconstruct coverage, with renames represented
 as a deletion and an addition. A truncated tree fails the coverage check.
 
-`status` identifies the gate status at the head by App identity. It names statuses from
-other accounts as not counting. When a private App's metadata is inaccessible to the GET
-client, the source is reported as UNVERIFIED.
+For the configured gate context at the head, `status` names each status's state and its
+creator's login and account type. Its source is UNVERIFIED because GitHub's status API
+does not report which App posted it; the review gate's ruleset decides whether it counts.
+This applies to bots and people: a person's status can carry an App's integration when
+posted with that App's user token. This display limitation adds no check rule or authorize
+blocker. When the context has no status, the gate line says `no status`.
 
 `prep` refuses rather than guess: it names the first earlier pass with no record, a head that
 moved after the last record, a route that is not in the configuration's tables, a vendor that
