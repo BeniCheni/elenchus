@@ -1,7 +1,7 @@
 repo: BeniCheni/elenchus
 pr: 1
 head: dcb914e3724e0e6ed0462f52f248185f9e138d6a
-base: replay/main e0a2aa6bd89bfa2ca6c931d8da5787b7672b6d14
+base: replay/main 610f74bcd331b229e93f127e256230bb5406d136
 
 pass 0: recorded, brief the cold review, seat PM, output 0faf606, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925461873
 pass 1: recorded, cold review, seat reviewer, output 89b8067, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925472892
@@ -11,6 +11,7 @@ pass 2.5: recorded, synthesis, seat PM, output 09324fb, comment https://github.c
 pass 3: recorded, adjudication, seat Beni, output 09324fb, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925503434
 pass exec: recorded, executor, seat executor, output dcb914e, comment https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925540982
 head equals last output_sha dcb914e
+gate: no status
 
 next: authorize
-blocked: Sprint 3 builds authorize
+blocked: authorization required

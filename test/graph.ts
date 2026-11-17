@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { parseConfig } from "../src/config.js";
 import type { GhClient, GhGetOptions } from "../src/gh.js";
 import type { Config, GhComment, GhCompare, GhPull } from "../src/types.js";
@@ -11,7 +11,12 @@ export function kickoffConfig(): Config {
 }
 
 export function replayConfig(): Config {
-  const captured = new URL("./fixtures/replay-p9/%252Frepos%252FBeniCheni%252Felenchus%252Fcontents%252F.elenchus.json%253Fref%253Dreplay%252Fmain.json", import.meta.url);
+  const dir = new URL("./fixtures/replay-p9/", import.meta.url);
+  const names = readdirSync(dir).filter((name) =>
+    decodeURIComponent(name).startsWith("/repos/BeniCheni/elenchus/contents/.elenchus.json?ref="),
+  );
+  if (names.length !== 1) throw new Error("replay fixture must capture exactly one configuration");
+  const captured = new URL(encodeURIComponent(names[0]!), dir);
   const { content } = JSON.parse(readFileSync(captured, "utf8")) as { content: string };
   const { vendors } = parseConfig(JSON.parse(Buffer.from(content, "base64").toString("utf8")) as unknown);
   return { ...kickoffConfig(), vendors };

@@ -274,7 +274,7 @@ and a merge waits for that proof. In order:
 
 1. **Read the records** — `status` and `check`. Done.
 2. **Prepare the seats** — `prep`, `handoff` and the coverage rule. Done.
-3. **The gate and schema v1.2.** App-backed `authorize`, configurable policy, re-reads and
+3. **The gate and schema v1.2.** Done on the replay. App-backed `authorize`, configurable policy, re-reads and
    repository-defined passes. Live proof on the replay precedes adopter enablement.
 4. **Adoption.** A release adopters can pin, record blocks in each adopter's review
    instructions, and release blocks that derive the base branch and merge commit from the
