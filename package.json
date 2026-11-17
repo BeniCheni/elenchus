@@ -16,8 +16,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "typecheck": "tsc --noEmit && tsc -p harness --noEmit",
+    "test": "vitest run",
+    "harness:t4": "node --experimental-transform-types --import ./harness/register.mjs harness/t4.ts"
   },
   "dependencies": {
     "ajv": "8.20.0"
