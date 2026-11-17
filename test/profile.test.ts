@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { profilePath, renderProfile } from "../src/profile.js";
 
@@ -7,7 +8,7 @@ describe("deny profiles", () => {
   it("renders each vendor's form, and adds file-write denies for a read-only seat", () => {
     expect(profilePath("claude")).toBe(".claude/settings.local.json");
     expect(profilePath("cursor")).toBe(".cursor/cli.json");
-    expect(profilePath("codex")).toBe("seat.rules");
+    expect(profilePath("codex")).toBe(".codex/rules/seat.rules");
 
     const claude = JSON.parse(renderProfile("claude", forbidden, "writing")) as { permissions: { deny: string[] } };
     expect(claude.permissions.deny).toEqual([
@@ -41,5 +42,14 @@ describe("deny profiles", () => {
     expect(codex).toContain('pattern = ["gh", "release"]');
     expect(codex).toContain('pattern = ["apply_patch"]');
     expect(renderProfile("codex", forbidden, "writing")).not.toContain("apply_patch");
+  });
+
+  it("says the deny profiles are seatbelts, and names what they miss", () => {
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toMatch(/seatbelts that stop the direct forms/);
+    expect(readme).toContain("git push origin +HEAD:main");
+    expect(readme).toContain("--force-with-lease");
+    expect(readme).toContain("sh -c");
+    expect(readme).toContain("eval");
   });
 });

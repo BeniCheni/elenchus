@@ -1,74 +1,84 @@
-/**
- * Allow only the git operations prep needs. Anything else is refused before git is spawned.
- * `config` is local to the invocation: `--global`, `--system` and `--file` are refused.
- */
-export function assertGitAllowed(args: string[]): void {
-  const { command, rest } = splitGitInvocation(args);
-  if (command === "worktree") {
-    const sub = rest[0];
-    if (sub === "add" || sub === "list") return;
-    refuse(args);
-  }
-  if (command === "config") {
-    if (
-      rest.some(
-        (arg) =>
-          arg === "--global" ||
-          arg === "--system" ||
-          arg === "--file" ||
-          arg.startsWith("--file=") ||
-          arg === "--edit",
-      )
-    ) {
-      refuse(args);
-    }
-    return;
-  }
-  if (
-    command === "clone" ||
-    command === "fetch" ||
-    command === "rev-parse" ||
-    command === "merge-base" ||
-    command === "diff" ||
-    command === "ls-files" ||
-    command === "status"
-  ) {
-    return;
-  }
-  refuse(args);
-}
+import path from "node:path";
 
-function refuse(args: string[]): never {
+/**
+ * Allow only the exact git invocations prep makes. Anything else is refused
+ * before git is spawned. `-C` may name only the fetch cache or the seat being
+ * made, and only under the seat root. `config` is not among those invocations.
+ */
+export type GitScope = {
+  root: string;
+  /** Absolute paths `-C` may name: the fetch cache and the seat being made. */
+  places: string[];
+};
+
+export function assertGitAllowed(args: string[], scope: GitScope): void {
+  if (allowed(args, scope)) return;
   throw new Error(`git write refused: ${args.join(" ")}`);
 }
 
-function splitGitInvocation(args: string[]): { command: string; rest: string[] } {
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i] ?? "";
-    if (arg === "-C") {
-      if (args[i + 1] === undefined) refuse(args);
-      i += 2;
-      continue;
-    }
-    if (arg.startsWith("-C") && arg !== "-C") {
-      i += 1;
-      continue;
-    }
-    if (
-      arg === "--git-dir" ||
-      arg === "--work-tree" ||
-      arg === "-c" ||
-      arg === "--namespace" ||
-      arg.startsWith("--git-dir=") ||
-      arg.startsWith("--work-tree=") ||
-      arg.startsWith("--namespace=") ||
-      (arg.startsWith("-c") && !arg.startsWith("-C"))
-    ) {
-      refuse(args);
-    }
-    if (arg.startsWith("-")) refuse(args);
-    return { command: arg, rest: args.slice(i + 1) };
+function allowed(args: string[], scope: GitScope): boolean {
+  if (args.length === 2 && args[0] === "rev-parse" && args[1] === "--git-dir") return true;
+  if (args[0] === "clone" && args[1] === "--bare" && args.length === 4) {
+    return isToken(args[2]) && underRoot(scope, args[3]);
   }
-  refuse(args);
+  if (
+    args.length === 8 &&
+    args[0] === "clone" &&
+    args[1] === "--reference" &&
+    args[3] === "--dissociate" &&
+    args[4] === "--branch" &&
+    isToken(args[5]) &&
+    isToken(args[6])
+  ) {
+    return underRoot(scope, args[2]) && underRoot(scope, args[7]);
+  }
+  if (args[0] !== "-C" || args.length < 3) return false;
+  const place = args[1];
+  if (!place || !isPlace(scope, place)) return false;
+  const rest = args.slice(2);
+  if (same(rest, ["fetch", "origin", "+refs/heads/*:refs/heads/*"])) return true;
+  if (same(rest, ["rev-parse", "HEAD"])) return true;
+  if (same(rest, ["status", "--porcelain"])) return true;
+  if (rest.length === 3 && rest[0] === "merge-base" && isToken(rest[1]) && isToken(rest[2])) return true;
+  if (
+    rest.length === 6 &&
+    rest[0] === "diff" &&
+    rest[1] === "-z" &&
+    rest[2] === "--name-status" &&
+    rest[3] === "--no-renames" &&
+    isToken(rest[4]) &&
+    isToken(rest[5])
+  ) {
+    return true;
+  }
+  if (rest[0] === "ls-files" && rest[1] === "--" && rest.length >= 3) {
+    return rest.slice(2).every(isRelativePath);
+  }
+  return false;
+}
+
+function same(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((arg, index) => arg === right[index]);
+}
+
+function isToken(value: string | undefined): value is string {
+  return typeof value === "string" && value.length > 0 && !value.startsWith("-");
+}
+
+function isRelativePath(value: string): boolean {
+  if (!isToken(value) || value.startsWith("/") || value.includes("\0")) return false;
+  return !value.split("/").includes("..");
+}
+
+function underRoot(scope: GitScope, target: string | undefined): boolean {
+  if (!target || target.startsWith("-")) return false;
+  const root = path.resolve(scope.root);
+  const resolved = path.resolve(target);
+  return resolved === root || resolved.startsWith(`${root}${path.sep}`);
+}
+
+function isPlace(scope: GitScope, target: string): boolean {
+  if (!underRoot(scope, target)) return false;
+  const resolved = path.resolve(target);
+  return scope.places.some((place) => path.resolve(place) === resolved);
 }

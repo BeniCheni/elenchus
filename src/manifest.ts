@@ -29,29 +29,54 @@ function expandFile(file: GhCompareFile): string[] | string {
     if (!file.previous_filename) return "file list truncated";
     return [file.previous_filename, name];
   }
-  if (status === "added" || status === "removed" || status === "modified" || status === "copied") return [name];
+  if (
+    status === "added" ||
+    status === "removed" ||
+    status === "modified" ||
+    status === "copied" ||
+    status === "changed"
+  ) {
+    return [name];
+  }
   return `file status ${status} is not a manifest status`;
 }
 
 export function manifestFromNameStatus(text: string): ManifestPath[] {
-  const entries: ManifestPath[] = [];
-  for (const line of text.split("\n")) {
-    if (line.length === 0) continue;
+  if (text.includes("\0")) return parseNameStatus(text.split("\0"));
+  const lines = text.split("\n").filter((line) => line.length > 0);
+  const records: string[] = [];
+  for (const line of lines) {
     const tab = line.indexOf("\t");
     if (tab < 0) throw new Error(`manifest line has no path: ${line}`);
-    const status = line.slice(0, tab);
-    const filePath = line.slice(tab + 1);
-    if (status === "A" || status === "D" || status === "M") {
-      entries.push({ status, path: filePath });
+    records.push(line.slice(0, tab), ...line.slice(tab + 1).split("\t"));
+  }
+  return parseNameStatus(records);
+}
+
+/** A type change is a modification. Paths are the raw names `-z` prints, quotes included nowhere. */
+function parseNameStatus(records: string[]): ManifestPath[] {
+  const entries: ManifestPath[] = [];
+  let index = 0;
+  while (index < records.length) {
+    const status = records[index];
+    if (status === undefined || status.length === 0) {
+      index += 1;
       continue;
     }
     if (status.startsWith("R") || status.startsWith("C")) {
-      const parts = filePath.split("\t");
-      const from = parts[0];
-      const to = parts[1];
-      if (!from || !to) throw new Error(`manifest rename has no both paths: ${line}`);
+      const from = records[index + 1];
+      const to = records[index + 2];
+      if (!from || !to) throw new Error(`manifest rename has no both paths: ${status}`);
       if (status.startsWith("R")) entries.push({ status: "D", path: from });
       entries.push({ status: "A", path: to });
+      index += 3;
+      continue;
+    }
+    const filePath = records[index + 1];
+    if (!filePath) throw new Error(`manifest line has no path: ${status}`);
+    if (status === "A" || status === "D" || status === "M" || status === "T") {
+      entries.push({ status: status === "T" ? "M" : status, path: filePath });
+      index += 2;
       continue;
     }
     throw new Error(`manifest status ${status} is not A, D or M`);

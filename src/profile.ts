@@ -2,11 +2,24 @@ import type { SeatKind } from "./types.js";
 
 export type VendorName = "claude" | "codex" | "cursor";
 
-/** Paths written into the worktree. Each is excluded through the clone's info/exclude. */
+/**
+ * Paths written into the seat. Each is excluded through that seat's info/exclude.
+ * Codex reads `.codex/rules` only when the project layer is trusted. A `-c`
+ * `projects."<seat>".trust_level="trusted"` override does not trust it: Codex
+ * reports the project-local configuration as disabled and points at `--trust`,
+ * which persists trust under `~/.codex`. That write is not used, so the profile
+ * is not known to load.
+ */
+export const CODEX_PROFILE_LOADS = false;
+
+export function codexTrustConfig(seat: string): string {
+  return `projects."${seat}".trust_level="trusted"`;
+}
+
 export function profilePath(vendor: VendorName): string {
   if (vendor === "claude") return ".claude/settings.local.json";
   if (vendor === "cursor") return ".cursor/cli.json";
-  return "seat.rules";
+  return ".codex/rules/seat.rules";
 }
 
 /**
