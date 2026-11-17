@@ -8,6 +8,7 @@ import { vendorForRuntime } from "./config.js";
 import { loadReview, recordTimeline } from "./load.js";
 import { manifestFromNameStatus, type ManifestPath } from "./manifest.js";
 import { CODEX_PROFILE_LOADS, codexTrustConfig, profilePath, renderProfile, type VendorName } from "./profile.js";
+import { seatCredentialArgs, withSeatToken } from "./seat-credentials.js";
 import { shellQuote } from "./quote.js";
 import { sameSha } from "./sha.js";
 import type { Config, InstallConfig, ReviewState, SeatKind, VendorConfig } from "./types.js";
@@ -23,6 +24,7 @@ export type PrepRequest = {
   model: string;
   effort: string;
   confirmedBy: string;
+  seatKeychainService?: string;
   root?: string;
   config?: Config;
   cloneUrl?: string;
@@ -79,7 +81,7 @@ export function seatPath(root: string, repo: string, pr: number, pass: string): 
 
 export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   const root = path.resolve(request.root ?? defaultSeatRoot());
-  const scope: GitScope = { root, places: [] };
+  const scope: GitScope = { root, places: [], seatKeychainService: request.seatKeychainService };
   const run = request.run ?? ((command, args, cwd) => defaultRun(command, args, cwd, scope));
   await refuseRootInsideGit(root, run);
   await mkdir(root, { recursive: true });
@@ -149,12 +151,18 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   }
   const headRef = state.pull.head.ref;
   if (!headRef) throw new Error("pull request has no head ref");
+  const service = request.seatKeychainService;
+  if (!service || /[\r\n\0]/.test(service)) {
+    throw new Error("prep requires --seat-keychain-service with a Keychain item name");
+  }
   const cloneUrl = request.cloneUrl ?? `https://github.com/${request.repo}.git`;
-  await ensureCache(cache, cloneUrl, run);
-  await run("git", ["-C", cache, "fetch", "origin", FETCH]);
+  const cloneCredentials = seatCredentialArgs("--config", service);
+  await ensureCache(cache, cloneUrl, cloneCredentials, run);
+  await run("git", ["-C", cache, ...seatCredentialArgs("-c", service), "fetch", "origin", FETCH]);
   await mkdir(path.dirname(seat), { recursive: true });
   await run("git", [
     "clone",
+    ...cloneCredentials,
     "--reference",
     cache,
     "--dissociate",
@@ -202,7 +210,7 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
 
   const installed = await installSeat(seat, installs, run);
   await assertSymlinksInside(seat);
-  const launch = launchLine(seat, vendorName, model, effort, seatKind, vendor.binary);
+  const launch = `cd ${shellQuote(seat)} && ${withSeatToken(service, vendorCommand(seat, vendorName, model, effort, seatKind, vendor.binary))}`;
   const mergeBase = (await run("git", ["-C", seat, "merge-base", `origin/${state.baseRef}`, head])).trim();
   const nameStatus = await run("git", [
     "-C",
@@ -325,11 +333,11 @@ export async function writeExcluded(seat: string, files: { file: string; body: s
   }
 }
 
-async function ensureCache(cache: string, cloneUrl: string, run: Runner): Promise<void> {
+async function ensureCache(cache: string, cloneUrl: string, credentials: string[], run: Runner): Promise<void> {
   const exists = await lstat(cache).catch(() => null);
   if (!exists) {
     await mkdir(path.dirname(cache), { recursive: true });
-    await run("git", ["clone", "--bare", cloneUrl, cache]);
+    await run("git", ["clone", ...credentials, "--bare", cloneUrl, cache]);
   }
 }
 
@@ -396,7 +404,7 @@ async function openSeats(root: string, state: ReviewState): Promise<{ pass: stri
   return found;
 }
 
-function launchLine(
+function vendorCommand(
   seat: string,
   vendor: VendorName,
   model: string,
@@ -404,18 +412,17 @@ function launchLine(
   kind: SeatKind,
   binary?: string,
 ): string {
-  const prefix = `cd ${shellQuote(seat)} && `;
   if (vendor === "claude") {
     const plan = kind === "read-only" ? " --permission-mode plan" : "";
-    return `${prefix}claude --model ${shellQuote(model)} --effort ${shellQuote(effort)}${plan}`;
+    return `claude --model ${shellQuote(model)} --effort ${shellQuote(effort)}${plan}`;
   }
   if (vendor === "codex") {
     if (!binary) throw new Error("codex binary is not in the configuration");
     const sandbox = kind === "read-only" ? "read-only" : "workspace-write";
     const trust = CODEX_PROFILE_LOADS ? ` -c ${shellQuote(codexTrustConfig(seat))}` : "";
-    return `${prefix}${shellQuote(binary)} -m ${shellQuote(model)} -c ${shellQuote(`model_reasoning_effort=${effort}`)} --sandbox ${shellQuote(sandbox)}${trust}`;
+    return `${shellQuote(binary)} -m ${shellQuote(model)} -c ${shellQuote(`model_reasoning_effort=${effort}`)} --sandbox ${shellQuote(sandbox)}${trust}`;
   }
-  return `${prefix}agent --model ${shellQuote(model)}`;
+  return `agent --model ${shellQuote(model)}`;
 }
 
 async function refuseRootInsideGit(root: string, run: Runner): Promise<void> {

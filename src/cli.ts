@@ -16,7 +16,7 @@ type Target = { repo: string; pr: number };
 function usage(): never {
   console.error("usage: elenchus status <owner/repo#n | pull-url> [--json] [--repo owner/repo] [--config file]");
   console.error("       elenchus check  <owner/repo#n | pull-url> [--repo owner/repo] [--config file]");
-  console.error("       elenchus prep <owner/repo#n | n> <pass> --runtime <vendor> --model <id> --effort <word> --confirmed-by <name> [--root <dir>] [--repo owner/repo] [--config file]");
+  console.error("       elenchus prep <owner/repo#n | n> <pass> --seat-keychain-service name [--runtime <vendor> --model <id> --effort <word> --confirmed-by <name>] [--root <dir>] [--repo owner/repo] [--config file]");
   console.error("       elenchus authorize <owner/repo#n | pull-url> [--dry-run] [--repo owner/repo] [--app-keychain-service name]");
   console.error("       elenchus handoff <owner/repo#n | n> [--repo owner/repo] [--config file] [--subject text]");
   process.exit(2);
@@ -38,6 +38,7 @@ type Flags = {
   json: boolean;
   dryRun: boolean;
   appKeychainService?: string;
+  seatKeychainService?: string;
   config?: Config;
   repoFlag?: string;
   runtime?: string;
@@ -53,6 +54,7 @@ function readFlags(argv: string[], command: string): Flags {
   let json = false;
   let dryRun = false;
   let appKeychainService: string | undefined;
+  let seatKeychainService: string | undefined;
   let configPath: string | undefined;
   let repoFlag: string | undefined;
   let runtime: string | undefined;
@@ -81,6 +83,9 @@ function readFlags(argv: string[], command: string): Flags {
     } else if (arg === "--app-keychain-service") {
       if (command !== "authorize") usage();
       appKeychainService = take("--app-keychain-service");
+    } else if (arg === "--seat-keychain-service") {
+      if (command !== "prep") usage();
+      seatKeychainService = take("--seat-keychain-service");
     } else if (arg === "--config") {
       if (command === "authorize") {
         throw new Error("authorize uses the configuration at the PR base branch");
@@ -107,6 +112,7 @@ function readFlags(argv: string[], command: string): Flags {
     json,
     dryRun,
     ...(appKeychainService ? { appKeychainService } : {}),
+    ...(seatKeychainService ? { seatKeychainService } : {}),
     ...(config ? { config } : {}),
     ...(repoFlag ? { repoFlag } : {}),
     ...(runtime ? { runtime } : {}),
@@ -137,6 +143,7 @@ async function main(argv: string[]): Promise<void> {
       model: flags.model ?? "",
       effort: flags.effort ?? "",
       confirmedBy: flags.confirmedBy ?? "",
+      seatKeychainService: flags.seatKeychainService,
       ...(flags.root ? { root: flags.root } : {}),
       ...(flags.config ? { config: flags.config } : {}),
     });

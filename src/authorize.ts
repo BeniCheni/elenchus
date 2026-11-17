@@ -33,7 +33,8 @@ export async function authorize(
       items.push({ severity: "fail", rule: "records", pass: pass.id, message: "no valid record" });
     }
   }
-  items.push(...unresolvedFindings(state), ...await checkHead(gh, state, true));
+  const headItems = await checkHead(gh, state, true);
+  items.push(...unresolvedFindings(state), ...headItems.filter(({ severity }) => severity === "fail"));
   if (items.length > 0) return { ok: false, items };
   if (!options.dryRun) {
     if (gate.app_id === undefined) throw new Error("authorize requires config.gate.app_id");

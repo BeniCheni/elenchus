@@ -449,6 +449,7 @@ function observedModel(record: VendorRecord, requested: string): { modelObserved
 async function probe(bare: string, sha: string, vendor: VendorName, kind: SeatKind): Promise<ProbeReport> {
   const root = path.join(scratch, vendor, kind);
   const report = await prepareSeat({
+    seatKeychainService: "elenchus local T4 fixture",
     gh: localGh(sha),
     repo: REPO,
     pr: 1,
