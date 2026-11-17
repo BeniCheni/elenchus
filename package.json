@@ -2,7 +2,7 @@
   "name": "elenchus",
   "version": "0.0.0",
   "private": true,
-  "description": "A stateless controller that reads one Kickoff 360 seat record per pass and says what the review needs next.",
+  "description": "A read-only controller for multi-pass, cross-vendor AI code review on GitHub: it reads each pass's seat record back and says what the review needs next.",
   "type": "module",
   "bin": {
     "elenchus": "./dist/cli.js"
