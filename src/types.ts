@@ -160,6 +160,7 @@ export type GhCompareFile = {
 export type GhCompare = {
   status: "ahead" | "behind" | "diverged" | "identical";
   total_commits?: number;
+  merge_base_commit?: { sha: string };
   commits?: GhCompareCommit[];
   files?: GhCompareFile[];
 };
@@ -167,7 +168,10 @@ export type GhCompare = {
 export type GhPull = {
   number: number;
   html_url?: string;
-  head: { sha: string; ref?: string };
+  state?: string;
+  merged?: boolean;
+  merge_commit_sha?: string | null;
+  head: { sha: string; ref?: string; repo?: { full_name?: string } | null };
   base: { sha: string; ref: string };
 };
 
@@ -240,6 +244,8 @@ export type ReviewState = {
   head: string;
   baseRef: string;
   baseSha: string;
+  pull: GhPull;
+  gateStatus: string | null;
   config: Config;
   passes: PassState[];
   orphans: Orphan[];
@@ -274,6 +280,9 @@ export type StatusView = {
   /** Set once every pass is recorded: whether the head equals the last output_sha. */
   headNote: string | null;
   unreadable: Unreadable[];
+  merged: boolean;
+  mergeCommit: string | null;
+  gateStatus: string | null;
 };
 
 export type Notice = {

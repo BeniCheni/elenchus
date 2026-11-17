@@ -129,7 +129,10 @@ async function main(argv: string[]): Promise<void> {
     process.stdout.write(await buildHandoff(gh, target.repo, target.pr, flags.config, flags.subject));
     return;
   }
-  const state = await loadReview(gh, target.repo, target.pr, flags.config);
+  const state = await loadReview(gh, target.repo, target.pr, flags.config, {
+    ranges: command === "check",
+    gateStatus: command === "status",
+  });
   if (command === "status") {
     const view = buildStatus(state);
     process.stdout.write(flags.json ? `${JSON.stringify(view, null, 2)}\n` : formatStatus(view));

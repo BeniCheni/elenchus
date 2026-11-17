@@ -136,14 +136,21 @@ describe("coverage rule", () => {
     expect(report).not.toMatch(/FAIL coverage/);
   });
 
-  it("fails closed when the compare has no file list", async () => {
+  it("fails closed when the recursive trees are truncated", async () => {
     const comments = [
       comment(1, fenced(seat({ pass: "0" })), "2026-11-14T00:00:01Z"),
       comment(2, fenced(seat({ pass: "1", input_sha: B, output_sha: B, coverage: matching })), "2026-11-14T00:00:02Z"),
     ];
-    const state = await loadReview(graphGh({ head: B, baseSha: A, comments, nodes }), "BeniCheni/elenchus", 1, kickoffConfig());
+    const inner = graphGh({ head: B, baseSha: A, comments, nodes });
+    const gh: GhClient = {
+      async get(apiPath, options) {
+        if (apiPath.includes("/git/trees/")) return { tree: [], truncated: true };
+        return inner.get(apiPath, options);
+      },
+    };
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
     const report = formatCheck(buildCheck(state));
-    expect(report).toMatch(/FAIL coverage pass 1 .*file list truncated/);
+    expect(report).toMatch(/FAIL coverage pass 1 .*recursive git tree truncated/);
   });
 
   it("still checks a configuration that has none of the new fields", async () => {

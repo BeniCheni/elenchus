@@ -1,7 +1,8 @@
 import { parseConfig } from "./config.js";
 import type { GhClient } from "./gh.js";
-import { manifestFromCompare } from "./manifest.js";
-import { extractRecord, guessPass, hasUnreadJsonFence } from "./records.js";
+import { readManifest } from "./manifest.js";
+import { extractRecord, guessPass, hasJsonFence, hasUnreadJsonFence } from "./records.js";
+import { readGateStatus } from "./gate-status.js";
 import { validateSeatRecord } from "./schema.js";
 import { sameSha } from "./sha.js";
 import type {
@@ -25,13 +26,15 @@ export async function loadReview(
   repo: string,
   pr: number,
   configOverride?: Config,
+  options: { ranges?: boolean; gateStatus?: boolean } = {},
 ): Promise<ReviewState> {
   const pull = (await gh.get(`/repos/${repo}/pulls/${pr}`)) as GhPull;
-  const baseTip = (await gh.get(`/repos/${repo}/commits/${pull.base.ref}`)) as { sha: string };
-  const comments = (await gh.get(`/repos/${repo}/issues/${pr}/comments?per_page=100`, {
-    paginate: true,
-  })) as GhComment[];
-  const config = configOverride ?? (await readConfig(gh, repo, pull.base.ref));
+  if (pull.number !== pr) throw new Error(`GitHub returned pull request ${pull.number} for ${pr}`);
+  const [baseSha, comments] = await Promise.all([
+    reviewBase(gh, repo, pull),
+    gh.get(`/repos/${repo}/issues/${pr}/comments?per_page=100`, { paginate: true }) as Promise<GhComment[]>,
+  ]);
+  const config = configOverride ?? await readConfig(gh, repo, baseSha);
   const known = new Set(config.passes.map((pass) => pass.id));
   const { attempts, notices, unreadable } = parseAttempts(comments, config, known);
   const orphans = attempts
@@ -43,13 +46,21 @@ export async function loadReview(
       reason: attempt.reason ?? `pass ${attempt.pass} is not configured`,
     }));
   const passes = config.passes.map((pass) => passState(pass, attempts.filter((attempt) => attempt.pass === pass.id)));
-  const compared = await attachGit(gh, repo, pull.head.sha, baseTip.sha, passes, config);
+  const compared = await attachGit(gh, repo, pull.head.sha, baseSha, passes, config, {
+    ranges: options.ranges !== false && !pull.merged,
+    merged: pull.merged === true,
+  });
+  const gateStatus = options.gateStatus && config.gate
+    ? await readGateStatus(gh, repo, pull.head.sha, config.gate)
+    : null;
   return {
     repo,
     pr: pull.number,
     head: pull.head.sha,
     baseRef: pull.base.ref,
-    baseSha: baseTip.sha,
+    baseSha,
+    pull,
+    gateStatus,
     config,
     passes: compared.passes,
     orphans,
@@ -59,10 +70,23 @@ export async function loadReview(
   };
 }
 
+async function reviewBase(gh: GhClient, repo: string, pull: GhPull): Promise<string> {
+  if (pull.merged) {
+    if (!pull.merge_commit_sha) return pull.base.sha;
+    const merge = await gh.get(`/repos/${repo}/commits/${encodeURIComponent(pull.merge_commit_sha)}`) as {
+      parents?: { sha: string }[];
+    };
+    return merge.parents?.[0]?.sha ?? pull.base.sha;
+  }
+  const ref = encodeURIComponent(`heads/${pull.base.ref}`);
+  const tip = await gh.get(`/repos/${repo}/commits/${ref}`) as { sha: string };
+  return tip.sha;
+}
+
 async function readConfig(gh: GhClient, repo: string, ref: string): Promise<Config> {
   let file: GhContent;
   try {
-    file = (await gh.get(`/repos/${repo}/contents/.elenchus.json?ref=${ref}`)) as GhContent;
+    file = (await gh.get(`/repos/${repo}/contents/.elenchus.json?ref=${encodeURIComponent(ref)}`)) as GhContent;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`no .elenchus.json on ${ref}: ${message}`);
@@ -86,15 +110,15 @@ function parseAttempts(
   const unreadable: UnreadableEvent[] = [];
   for (const comment of ordered) {
     const login = comment.user?.login ?? "";
+    const body = comment.body ?? "";
     if (!config.record_authors.includes(login)) {
-      notices.push({
+      if (hasJsonFence(body)) notices.push({
         rule: "record_authors",
         commentUrl: comment.html_url,
         message: `comment by ${login || "unknown"} ignored for records`,
       });
       continue;
     }
-    const body = comment.body ?? "";
     const raw = extractRecord(body);
     if (hasUnreadJsonFence(body)) {
       notices.push({
@@ -287,11 +311,13 @@ async function attachGit(
   baseSha: string,
   passes: PassState[],
   config: Config,
+  options: { ranges: boolean; merged: boolean },
 ): Promise<{ passes: PassState[]; inProgressPass: string | null }> {
   const cache = new Map<string, GhCompare>();
-  const compare = async (base: string, tip: string): Promise<GhCompare> => {
-    const key = `${base}...${tip}`;
-    const hit = cache.get(key);
+  const compare = async (base: string, tip: string, paginate = false): Promise<GhCompare> => {
+    const spec = `${base}...${tip}`;
+    const key = paginate ? `${spec}?per_page=100` : spec;
+    const hit = cache.get(`${spec}?per_page=100`) ?? cache.get(key);
     if (hit) return hit;
     try {
       const value = (await gh.get(`/repos/${repo}/compare/${base}...${tip}`)) as GhCompare;
@@ -299,7 +325,7 @@ async function attachGit(
       return value;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("Not Found") || message.includes("No common ancestor")) throw new UnresolvedSha(key);
+      if (message.includes("Not Found") || message.includes("No common ancestor")) throw new UnresolvedSha(spec);
       throw error;
     }
   };
@@ -312,7 +338,7 @@ async function attachGit(
   const timeline = recordTimeline(passes);
   const next: PassState[] = [];
   for (const pass of passes) {
-    if (pass.outcome.kind !== "recorded") {
+    if (!options.ranges || pass.outcome.kind !== "recorded") {
       next.push(pass);
       continue;
     }
@@ -324,8 +350,10 @@ async function attachGit(
     try {
       const resolveError = await rereadChainError(pass.outcome.history, timeline, isAncestorOrEqual);
       const outputIsAncestor = await isAncestorOrEqual(record.output_sha, head);
-      const range = await seatRange(record, baseSha, compare, isAncestorOrEqual);
-      const coverageManifest = wantsManifest ? manifestFromCompare(await compare(baseSha, record.input_sha)) : undefined;
+      const range = await seatRange(record, baseSha, compare);
+      const coverageManifest = wantsManifest
+        ? await readManifest(gh, repo, await compare(baseSha, record.input_sha), record.input_sha)
+        : undefined;
       next.push({ ...pass, resolveError, outputIsAncestor, range, ...(coverageManifest ? { coverageManifest } : {}) });
     } catch (error) {
       if (!(error instanceof UnresolvedSha)) throw error;
@@ -342,7 +370,7 @@ async function attachGit(
 
   const firstGap = next.find((pass) => pass.outcome.kind !== "recorded");
   let inProgressPass: string | null = null;
-  if (firstGap && firstGap.outcome.kind === "absent") {
+  if (!options.merged && firstGap?.outcome.kind === "absent") {
     const index = next.indexOf(firstGap);
     const previous = index > 0 ? next[index - 1] : undefined;
     if (previous?.outcome.kind === "recorded") {
@@ -386,13 +414,12 @@ async function rereadChainError(
 async function seatRange(
   record: SeatRecord,
   baseSha: string,
-  compare: (base: string, tip: string) => Promise<GhCompare>,
-  isAncestorOrEqual: (ancestor: string, descendant: string) => Promise<boolean>,
+  compare: (base: string, tip: string, paginate: boolean) => Promise<GhCompare>,
 ): Promise<{ commits: RangeCommit[]; error: string | null }> {
   if (sameSha(record.input_sha, record.output_sha)) {
     return { commits: [], error: null };
   }
-  const result = await compare(record.input_sha, record.output_sha);
+  const result = await compare(record.input_sha, record.output_sha, true);
   if (result.status !== "ahead") {
     return {
       commits: [],
@@ -404,9 +431,16 @@ async function seatRange(
   if (commits.length !== total) {
     return { commits: [], error: `compare of ${record.input_sha}..${record.output_sha} was truncated (${commits.length} of ${total})` };
   }
+  if (sameSha(baseSha, record.output_sha)) return { commits: [], error: null };
+  const fromBase = sameSha(baseSha, record.input_sha) ? result : await compare(baseSha, record.output_sha, true);
+  const unique = fromBase.commits ?? [];
+  if (fromBase.total_commits !== undefined && fromBase.total_commits !== unique.length) {
+    return { commits: [], error: `compare of base ${baseSha} to ${record.output_sha} was truncated` };
+  }
+  const outsideBase = new Set(unique.map((commit) => commit.sha));
   const kept: RangeCommit[] = [];
   for (const commit of commits) {
-    if (await isAncestorOrEqual(commit.sha, baseSha)) continue;
+    if (!outsideBase.has(commit.sha)) continue;
     const name = commit.commit?.author?.name ?? "";
     const email = commit.commit?.author?.email ?? "";
     kept.push({ sha: commit.sha, author: `${name} <${email}>` });

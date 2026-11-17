@@ -99,7 +99,7 @@ function client(head: string, records: SeatRecord[], baseSha = head): GhClient {
           base: { sha: baseSha, ref: "main", repo: { full_name: "BeniCheni/elenchus" } },
         };
       }
-      if (apiPath.endsWith("/commits/main")) return { sha: baseSha };
+      if (apiPath.endsWith("/commits/heads%2Fmain")) return { sha: baseSha };
       if (apiPath.includes("/comments")) return comments;
       if (apiPath.includes("/compare/")) return { status: "ahead", total_commits: 0, commits: [], files: [] };
       throw new Error(`unexpected GET ${apiPath}`);

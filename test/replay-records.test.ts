@@ -64,7 +64,7 @@ const nodes: Record<string, Node> = {
 
 async function checkRecords(records: SeatRecord[], head: string, baseSha: string): Promise<string> {
   const comments = records.map((record, index) =>
-    comment(index + 1, `${replayRecords[0]?.firstLine ?? "note"}\n\n\`\`\`json\n${JSON.stringify(record, null, 2)}\n\`\`\`\n`, `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`),
+    comment(index + 1, `${replayRecords[0]?.firstLine ?? "note"}\n\n\`\`\`json\n${JSON.stringify({ ...record, pr: 1 }, null, 2)}\n\`\`\`\n`, `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`),
   );
   const state = await loadReview(
     graphGh({ head, baseSha, comments, nodes }),
@@ -124,7 +124,7 @@ describe("transcribed #320 records", () => {
     const comments = replayRecords.map((entry, index) =>
       comment(
         index + 1,
-        `${entry.firstLine}\n\n\`\`\`json\n${JSON.stringify(entry.record, null, 2)}\n\`\`\`\n`,
+        `${entry.firstLine}\n\n\`\`\`json\n${JSON.stringify({ ...entry.record, pr: 1 }, null, 2)}\n\`\`\`\n`,
         `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`,
       ),
     );

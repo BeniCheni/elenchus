@@ -17,6 +17,7 @@ describe("gh read-only wrapper", () => {
       "--method",
       "GET",
       "--paginate",
+      "--slurp",
       "/repos/BeniCheni/elenchus/issues/1/comments?per_page=100",
     ]);
     expect(() => assertGhReadOnly(["api", "--method", "GET", "/repos/BeniCheni/elenchus"])).not.toThrow();
@@ -75,4 +76,12 @@ describe("gh read-only wrapper", () => {
     await expect(gh.get("-XPOST")).rejects.toThrow(/gh write refused/);
     expect(spawned).toBe(false);
   });
+});
+
+it("joins all compare pages without losing the first page's files", async () => {
+  const first = { status: "ahead", total_commits: 2, files: [{ filename: "first" }], commits: [{ sha: "a" }] };
+  const next = { status: "ahead", total_commits: 2, commits: [{ sha: "b" }] };
+  const gh = cliGh(async () => JSON.stringify([first, next]));
+  const compared = await gh.get("/repos/test/repo/compare/a...b?per_page=100", { paginate: true });
+  expect(compared).toEqual({ ...first, commits: [{ sha: "a" }, { sha: "b" }] });
 });

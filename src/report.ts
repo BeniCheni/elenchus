@@ -1,5 +1,5 @@
 import { vendorForRuntime } from "./config.js";
-import { recordTimeline } from "./load.js";
+import { postingOrder, recordTimeline } from "./load.js";
 import { sameSha } from "./sha.js";
 import type {
   CheckItem,
@@ -31,6 +31,9 @@ export function buildStatus(state: ReviewState): StatusView {
     next: nextStep(state, firstOpen),
     headNote: headNote(state),
     unreadable: state.unreadable,
+    merged: state.pull.merged === true,
+    mergeCommit: state.pull.merged ? state.pull.merge_commit_sha ?? null : null,
+    gateStatus: state.gateStatus,
   };
 }
 
@@ -114,8 +117,26 @@ export function buildCheck(state: ReviewState): CheckItem[] {
       message: orphan.reason,
     });
   }
-  for (const pass of state.passes) {
+  if (state.pull.merged) {
+    const sha = state.pull.merge_commit_sha;
+    items.push({ severity: "notice", rule: "merged", message: `pull request merged${sha ? ` at ${sha}` : ""}; range rules skipped` });
+  }
+  if (state.passes.every((pass) => pass.outcome.kind === "absent")) {
+    items.push({ severity: "notice", rule: "records", message: "no seat records" });
+  }
+  for (const [index, pass] of state.passes.entries()) {
     if (pass.outcome.kind !== "recorded") continue;
+    const original = pass.outcome.history[0]!;
+    const predecessor = state.passes[index - 1];
+    if (predecessor?.outcome.kind === "recorded" && postingOrder(original, predecessor.outcome.history[0]!) < 0) {
+      items.push({
+        severity: "fail",
+        rule: "sequence",
+        pass: pass.id,
+        comment: original.commentUrl,
+        message: `posted before pass ${predecessor.id}`,
+      });
+    }
     for (const earlier of state.passes) {
       if (earlier.id === pass.id) break;
       if (earlier.outcome.kind !== "recorded") {
@@ -135,7 +156,8 @@ export function buildCheck(state: ReviewState): CheckItem[] {
   checkRoutes(state, items);
   checkRetries(state, items);
   checkPostedBy(state, items);
-  checkCoverage(state, items);
+  checkPullNumber(state, items);
+  if (!state.pull.merged) checkCoverage(state, items);
   for (const item of state.unreadable) {
     if (item.attached) continue;
     items.push({
@@ -339,6 +361,19 @@ function checkObserved(
     comment: pass.outcome.commentUrl,
     message: `${field} requested ${observed.requested} observed ${observed.observed}`,
   });
+}
+
+function checkPullNumber(state: ReviewState, items: CheckItem[]): void {
+  for (const pass of state.passes) {
+    if (pass.outcome.kind !== "recorded" || pass.outcome.record.pr === state.pr) continue;
+    items.push({
+      severity: "fail",
+      rule: "pr",
+      pass: pass.id,
+      comment: pass.outcome.commentUrl,
+      message: `record pr ${pass.outcome.record.pr} does not match pull request ${state.pr}`,
+    });
+  }
 }
 
 function checkPostedBy(state: ReviewState, items: CheckItem[]): void {

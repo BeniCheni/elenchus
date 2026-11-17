@@ -11,7 +11,7 @@ export interface GhClient {
 export type CommandRunner = (command: string, args: string[]) => Promise<string>;
 
 /**
- * Allow exactly `api --method GET [--paginate] /path`.
+ * Allow exactly `api --method GET [--paginate --slurp] /path`.
  * Anything else is refused before gh is spawned.
  */
 export function assertGhReadOnly(args: string[]): void {
@@ -21,13 +21,13 @@ export function assertGhReadOnly(args: string[]): void {
 function readPath(args: string[]): string | null {
   if (args[0] !== "api" || args[1] !== "--method" || args[2] !== "GET") return null;
   if (args.length === 4) return args[3]?.startsWith("/") ? args[3] : null;
-  if (args.length === 5 && args[3] === "--paginate") return args[4]?.startsWith("/") ? args[4] : null;
+  if (args.length === 6 && args[3] === "--paginate" && args[4] === "--slurp") return args[5]?.startsWith("/") ? args[5] : null;
   return null;
 }
 
 export function ghApiArgs(apiPath: string, options?: GhGetOptions): string[] {
   const args = ["api", "--method", "GET"];
-  if (options?.paginate) args.push("--paginate");
+  if (options?.paginate) args.push("--paginate", "--slurp");
   args.push(apiPath);
   assertGhReadOnly(args);
   return args;
@@ -70,9 +70,20 @@ export function cliGh(run: CommandRunner = runCommand): GhClient {
     async get(apiPath, options) {
       const args = ghApiArgs(apiPath, options);
       const stdout = await run("gh", args);
-      return JSON.parse(stdout) as unknown;
+      const result = JSON.parse(stdout) as unknown;
+      return options?.paginate ? combinePages(result, apiPath) : result;
     },
   };
+}
+
+function combinePages(value: unknown, apiPath: string): unknown {
+  if (!Array.isArray(value)) throw new Error("gh pagination did not return pages");
+  if (value.every(Array.isArray)) return value.flat();
+  const key = apiPath.includes("/compare/") ? "commits" : apiPath.includes("/check-runs?") ? "check_runs" : null;
+  if (!key || !value.every((page) => page && typeof page === "object" && Array.isArray(page[key]))) {
+    throw new Error("gh pagination returned an unexpected page shape");
+  }
+  return { ...value[0], [key]: value.flatMap((page) => page[key]) };
 }
 
 export function recordingGh(inner: GhClient, dir: string): GhClient {

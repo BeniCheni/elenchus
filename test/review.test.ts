@@ -23,7 +23,7 @@ const nodes = {
 function seat(over: Partial<SeatRecord> & Pick<SeatRecord, "pass">): SeatRecord {
   return {
     seat_record: 1,
-    pr: 320,
+    pr: 1,
     runtime: "Claude Code",
     model: { requested: "claude-fable-5-2", observed: "claude-fable-5-2", source: "transcribed: test" },
     effort: { requested: "xhigh", observed: "xhigh", source: "transcribed: test" },
@@ -216,7 +216,7 @@ describe("status and check", () => {
     const check = formatCheck(buildCheck(state));
     expect(state.baseSha).toBe(B);
     expect(check).not.toMatch(/FAIL /);
-    expect(calls.some((call) => call.path.endsWith("/commits/replay/main"))).toBe(true);
+    expect(calls.some((call) => call.path.endsWith("/commits/heads%2Freplay%2Fmain"))).toBe(true);
   });
 
   it("drops commits reachable from the base branch before the author check", async () => {
@@ -523,4 +523,51 @@ it("uses the configured addressee and retry cap", async () => {
   expect(formatStatus(buildStatus(state))).toContain("next: escalate to Rae");
   expect(formatStatus(buildStatus(state))).toContain("retry cap 0 after 1 failed attempts");
   expect(formatCheck(buildCheck(state))).toContain("escalate to Rae");
+});
+
+it("fails sequence when an accepted record was posted before its predecessor, including tied timestamps", async () => {
+  const timestamp = "2026-11-14T00:00:01Z";
+  const { check } = await review([
+    comment(2, fenced(seat({ pass: "0" })), timestamp),
+    comment(1, fenced(seat({ pass: "1" })), timestamp),
+  ]);
+  expect(check).toMatch(/FAIL sequence pass 1 .*posted before pass 0/);
+});
+
+it("names a record with the wrong PR and ignores unauthorized comments without a json fence", async () => {
+  const { check } = await review([
+    comment(1, fenced(seat({ pass: "0", pr: 99 })), "2026-11-14T00:00:01Z"),
+    comment(2, "plain prose", "2026-11-14T00:00:02Z", "other"),
+    comment(3, fenced(seat({ pass: "1" })), "2026-11-14T00:00:03Z", "other"),
+  ]);
+  expect(check).toMatch(/FAIL pr pass 0 .*record pr 99 does not match pull request 1/);
+  expect(check).toMatch(/NOTICE record_authors .*issuecomment-3 /);
+  expect(check).not.toContain("issuecomment-2");
+});
+
+it("names a merged PR measured from the merge's first parent without range reads", async () => {
+  const calls: { path: string; paginate?: boolean }[] = [];
+  const gh = graphGh({
+    head: B, baseSha: A, mergedAt: C, nodes, calls,
+    comments: [comment(1, fenced(seat({ pass: "0", input_sha: A, output_sha: B })), "2026-11-14T00:00:01Z")],
+  });
+  const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
+  expect(state.baseSha).toBe(B);
+  expect(formatStatus(buildStatus(state))).toContain(`merged: ${C}\n`);
+  expect(formatCheck(buildCheck(state))).toContain(`NOTICE merged pull request merged at ${C}`);
+  expect(calls.map(({ path }) => path)).not.toContain("/repos/BeniCheni/elenchus/commits/heads%2Freplay%2Fmain");
+  expect(calls.some(({ path }) => path.includes("/compare/"))).toBe(false);
+});
+
+it("uses encoded refs and avoids writing-pass ranges in status mode", async () => {
+  const calls: { path: string; paginate?: boolean }[] = [];
+  const gh = graphGh({
+    head: C, baseSha: A, baseRef: "feature/a&b+#", nodes, calls,
+    comments: [comment(1, fenced(seat({ pass: "0", input_sha: A, output_sha: B, commits: [B] })), "2026-11-14T00:00:01Z")],
+  });
+  await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig(), { ranges: false });
+  expect(calls.some(({ path }) => path.endsWith("/commits/heads%2Ffeature%2Fa%26b%2B%23"))).toBe(true);
+  expect(calls.filter(({ path }) => path.includes("/compare/")).map(({ path }) => path)).toEqual([
+    `/repos/BeniCheni/elenchus/compare/${B}...${C}`,
+  ]);
 });

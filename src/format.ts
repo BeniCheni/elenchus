@@ -6,6 +6,7 @@ export function formatStatus(view: StatusView): string {
     `pr: ${view.pr}`,
     `head: ${view.head}`,
     `base: ${view.base.ref} ${view.base.sha}`,
+    ...(view.merged ? [view.mergeCommit ? `merged: ${view.mergeCommit}` : "merged"] : []),
     "",
   ];
   for (const pass of view.passes) {
@@ -25,6 +26,7 @@ export function formatStatus(view: StatusView): string {
     lines.push(`unreadable pass: ${item.commentUrl} ${item.reason}`);
   }
   if (view.headNote) lines.push(view.headNote);
+  if (view.gateStatus) lines.push(`gate: ${view.gateStatus}`);
   lines.push("");
   lines.push(`next: ${view.next.step}`);
   if (view.next.seat) lines.push(`seat: ${view.next.seat}`);

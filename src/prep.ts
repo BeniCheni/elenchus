@@ -84,7 +84,7 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   await refuseRootInsideGit(root, run);
   await mkdir(root, { recursive: true });
 
-  const state = await loadReview(request.gh, request.repo, request.pr, request.config);
+  const state = await loadReview(request.gh, request.repo, request.pr, request.config, { ranges: false });
   const pass = state.passes.find((item) => item.id === request.pass);
   if (!pass) throw new Error(`pass ${request.pass} is not in the configuration`);
   const seatKind = passSeatKind(state, request.pass);
@@ -144,7 +144,11 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   if (!installs || installs.length === 0) throw new Error("config has no installs");
   if (!forbidden || forbidden.length === 0) throw new Error("config has no forbidden commands");
 
-  const headRef = await headRefOf(request.gh, request.repo, request.pr);
+  if (state.pull.head.repo?.full_name?.toLowerCase() !== request.repo.toLowerCase()) {
+    throw new Error("pull requests from forks are not supported");
+  }
+  const headRef = state.pull.head.ref;
+  if (!headRef) throw new Error("pull request has no head ref");
   const cloneUrl = request.cloneUrl ?? `https://github.com/${request.repo}.git`;
   await ensureCache(cache, cloneUrl, run);
   await run("git", ["-C", cache, "fetch", "origin", FETCH]);
@@ -327,18 +331,6 @@ async function ensureCache(cache: string, cloneUrl: string, run: Runner): Promis
     await mkdir(path.dirname(cache), { recursive: true });
     await run("git", ["clone", "--bare", cloneUrl, cache]);
   }
-}
-
-async function headRefOf(gh: GhClient, repo: string, pr: number): Promise<string> {
-  const pull = (await gh.get(`/repos/${repo}/pulls/${pr}`)) as {
-    head?: { ref?: string; repo?: { full_name?: string } | null };
-  };
-  if (pull.head?.repo?.full_name !== repo) {
-    throw new Error("pull requests from forks are not supported");
-  }
-  const ref = pull.head?.ref;
-  if (!ref) throw new Error("pull request has no head ref");
-  return ref;
 }
 
 function passSeatKind(state: ReviewState, passId: string): SeatKind {

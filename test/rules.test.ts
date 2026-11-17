@@ -21,7 +21,7 @@ const chain: Record<string, Node> = {
 function seat(over: Partial<SeatRecord> & Pick<SeatRecord, "pass">): SeatRecord {
   return {
     seat_record: 1,
-    pr: 320,
+    pr: 1,
     runtime: "Claude Code",
     model: { requested: "claude-fable-5-2", observed: "claude-fable-5-2", source: "test" },
     effort: { requested: "xhigh", observed: "xhigh", source: "test" },
