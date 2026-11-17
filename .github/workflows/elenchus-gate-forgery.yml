@@ -1,0 +1,22 @@
+name: Gate forgery probes
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  forge-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Try the review context with GITHUB_TOKEN
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_HEAD: "21ba7b309e223e59c8f452c08f8cf94221f0c81f"
+        run: |
+          gh api --include --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GATE_HEAD}" \
+            -f state=success -f context=kickoff/360 \
+            -f description='T7 GITHUB_TOKEN forgery probe' \
+            -f target_url='https://github.com/BeniCheni/elenchus/pull/6'
