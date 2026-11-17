@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("node:child_process", () => ({ execFile: vi.fn() }));
 import { assertAppRequest } from "../src/app-status.js";
 
 const scope = { repo: "owner/repo", pr: 9, context: "review/ready", installationId: 42 };
@@ -54,4 +56,66 @@ describe("App request allowlist", () => {
       ...status, body: { ...status.body, target_url: "https://github.com/owner/repo/pull/-4" },
     }, { ...scope, pr: -4 })).toThrow(/App request refused/);
   });
+});
+
+describe("Keychain private-key hex decoding", () => {
+  it("consumes the hex form of a generated key and clears its input", async () => {
+    const { generateKeyPairSync, createPublicKey } = await import("node:crypto");
+    const { decodeKeychainPrivateKey } = await import("../src/app-status.js");
+    const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+    const output = Buffer.from(Buffer.from(pem).toString("hex") + "\n");
+    const decoded = decodeKeychainPrivateKey(output);
+    expect(createPublicKey(decoded).export({ type: "spki", format: "pem" }))
+      .toBe(publicKey.export({ type: "spki", format: "pem" }));
+    expect(output.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it("refuses raw PEM and malformed hex with the existing message and clears every input", async () => {
+    const { generateKeyPairSync } = await import("node:crypto");
+    const { decodeKeychainPrivateKey } = await import("../src/app-status.js");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+    const hex = Buffer.from(pem).toString("hex");
+    for (const value of [pem, "", "\n", "a\n", "0g\n", "AB\n", "aa \n", hex, hex + "\r\n", hex + "\n\n", "00\n"]) {
+      const output = Buffer.from(value);
+      expect(() => decodeKeychainPrivateKey(output))
+        .toThrow("could not open the App private key from macOS Keychain");
+      expect(output.every((byte) => byte === 0)).toBe(true);
+    }
+  });
+});
+
+it("decodes the key on the real Keychain reader path before signing", async () => {
+  const { generateKeyPairSync } = await import("node:crypto");
+  const { AppStatusClient } = await import("../src/app-status.js");
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" });
+  const output = Buffer.from(Buffer.from(pem).toString("hex") + "\n");
+  const spawn = vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
+    const callback = args.at(-1) as (error: null, out: Buffer, stderr: Buffer) => void;
+    callback(null, output, Buffer.alloc(0));
+    return {} as ReturnType<typeof execFile>;
+  });
+  const fetchStub = vi.fn(async (url: URL | RequestInfo) => {
+    const response = String(url).endsWith("/installation") ? { id: 42, app_id: 10 } :
+      String(url).endsWith("/access_tokens") ? { token: "synthetic-installation-token" } : {};
+    return new Response(JSON.stringify(response), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchStub);
+  try {
+    await new AppStatusClient().post({
+      repo: "owner/repo", pr: 9, context: "review/ready", sha,
+      appId: 10, keychainService: "synthetic-key-service",
+    });
+    expect(spawn).toHaveBeenCalledWith(
+      "/usr/bin/security", ["find-generic-password", "-s", "synthetic-key-service", "-w"],
+      { encoding: "buffer" }, expect.any(Function),
+    );
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+    expect(output.every((byte) => byte === 0)).toBe(true);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  }
 });

@@ -193,12 +193,37 @@ The operator creates a GitHub App with Commit statuses read and write and Metada
 webhooks off, installed on the intended repository. The App id belongs in `gate.app_id`.
 Its RSA private key is a macOS Keychain generic password whose access controls prompt on
 every read. `authorize --app-keychain-service <name>` reads it into memory through
-`/usr/bin/security`. The key is used to sign a JWT with Node's crypto library.
+`/usr/bin/security`. The reader accepts SecurityTool's lowercase
+hex output followed by one newline, decodes the PEM bytes in memory, and clears both buffers.
+The key is used to sign a JWT with Node's crypto library.
+
+Store the key's exact PEM bytes using `security -i` on standard input. In the interactive
+command, `-X` takes the file's hex. For example, the operator can run this locally, replacing
+the file path and placeholder service name. The command stream goes directly to `security`.
+
+```bash
+python3 - /path/to/app-private-key.pem <<'PYKEY' | /usr/bin/security -i
+from pathlib import Path
+import sys
+key = Path(sys.argv[1]).read_bytes()
+print('add-generic-password -a "review-controller" -s "your-app-key-service" -X ' + key.hex())
+PYKEY
+```
+
+Set the item's access controls in Keychain Access to prompt for every read with no trusted
+application, then delete the downloaded PEM file.
 
 Seats use a fine-grained token limited to the adopter repository, with Contents and Pull
 requests read and write and Metadata read. Administration, Workflows and Commit statuses
 remain at No access. Store it in another per-use-prompt Keychain item and pass its service
-name to `prep --seat-keychain-service <name>`.
+name to `prep --seat-keychain-service <name>`. To store the printable token, place `-w`
+last so `security` prompts for its value.
+
+```bash
+/usr/bin/security add-generic-password -a "review-seat" -s "your-seat-token-service" -w
+```
+
+Set this item's access controls to prompt for every read with no trusted application.
 
 The clone resets inherited credential helpers and installs its own helper that reads that
 item for HTTPS github.com requests. The printed launch line reads the same item by command

@@ -144,7 +144,7 @@ function keychainPrivateKey(service: string): Promise<KeyObject> {
     execFile("/usr/bin/security", ["find-generic-password", "-s", service, "-w"], { encoding: "buffer" }, (error, data) => {
       try {
         if (error) throw error;
-        resolve(createPrivateKey(data));
+        resolve(decodeKeychainPrivateKey(data));
       } catch {
         reject(new Error("could not open the App private key from macOS Keychain"));
       } finally {
@@ -152,4 +152,28 @@ function keychainPrivateKey(service: string): Promise<KeyObject> {
       }
     });
   });
+}
+
+/** Consume SecurityTool's lowercase hex plus one newline, clearing both buffers. */
+export function decodeKeychainPrivateKey(output: Buffer): KeyObject {
+  let decoded: Buffer | undefined;
+  try {
+    const length = output.length - 1;
+    if (output[length] !== 10 || length <= 0 || length % 2 !== 0) throw new Error();
+    const hex = output.subarray(0, length);
+    if (!hex.every((byte) => (byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102))) {
+      throw new Error();
+    }
+    decoded = Buffer.alloc(length / 2);
+    const digit = (byte: number) => byte <= 57 ? byte - 48 : byte - 87;
+    for (let i = 0; i < length; i += 2) {
+      decoded[i / 2] = digit(hex[i]!) * 16 + digit(hex[i + 1]!);
+    }
+    return createPrivateKey(decoded);
+  } catch {
+    throw new Error("could not open the App private key from macOS Keychain");
+  } finally {
+    decoded?.fill(0);
+    output.fill(0);
+  }
 }
