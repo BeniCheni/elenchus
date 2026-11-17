@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
+import { authorize } from "./authorize.js";
 import { parseConfig } from "./config.js";
 import { formatCheck, formatStatus } from "./format.js";
 import { checkHead } from "./gate-review.js";
@@ -16,6 +17,7 @@ function usage(): never {
   console.error("usage: elenchus status <owner/repo#n | pull-url> [--json] [--repo owner/repo] [--config file]");
   console.error("       elenchus check  <owner/repo#n | pull-url> [--repo owner/repo] [--config file]");
   console.error("       elenchus prep <owner/repo#n | n> <pass> --runtime <vendor> --model <id> --effort <word> --confirmed-by <name> [--root <dir>] [--repo owner/repo] [--config file]");
+  console.error("       elenchus authorize <owner/repo#n | pull-url> [--dry-run] [--repo owner/repo] [--app-keychain-service name]");
   console.error("       elenchus handoff <owner/repo#n | n> [--repo owner/repo] [--config file] [--subject text]");
   process.exit(2);
 }
@@ -34,6 +36,8 @@ function parseTarget(arg: string, repoFlag: string | undefined): Target {
 
 type Flags = {
   json: boolean;
+  dryRun: boolean;
+  appKeychainService?: string;
   config?: Config;
   repoFlag?: string;
   runtime?: string;
@@ -47,6 +51,8 @@ type Flags = {
 
 function readFlags(argv: string[], command: string): Flags {
   let json = false;
+  let dryRun = false;
+  let appKeychainService: string | undefined;
   let configPath: string | undefined;
   let repoFlag: string | undefined;
   let runtime: string | undefined;
@@ -69,7 +75,18 @@ function readFlags(argv: string[], command: string): Flags {
     if (arg === "--json") {
       if (command !== "status") usage();
       json = true;
-    } else if (arg === "--config") configPath = take("--config");
+    } else if (arg === "--dry-run") {
+      if (command !== "authorize") usage();
+      dryRun = true;
+    } else if (arg === "--app-keychain-service") {
+      if (command !== "authorize") usage();
+      appKeychainService = take("--app-keychain-service");
+    } else if (arg === "--config") {
+      if (command === "authorize") {
+        throw new Error("authorize uses the configuration at the PR base branch");
+      }
+      configPath = take("--config");
+    }
     else if (arg === "--repo") repoFlag = take("--repo");
     else if (arg === "--runtime") runtime = take("--runtime");
     else if (arg === "--model") model = take("--model");
@@ -88,6 +105,8 @@ function readFlags(argv: string[], command: string): Flags {
   const config = configPath ? parseConfig(JSON.parse(readFileSync(configPath, "utf8")) as unknown) : undefined;
   return {
     json,
+    dryRun,
+    ...(appKeychainService ? { appKeychainService } : {}),
     ...(config ? { config } : {}),
     ...(repoFlag ? { repoFlag } : {}),
     ...(runtime ? { runtime } : {}),
@@ -102,7 +121,7 @@ function readFlags(argv: string[], command: string): Flags {
 
 async function main(argv: string[]): Promise<void> {
   const [command, ...rest] = argv;
-  if (command !== "status" && command !== "check" && command !== "prep" && command !== "handoff") usage();
+  if (command !== "status" && command !== "check" && command !== "prep" && command !== "handoff" && command !== "authorize") usage();
   const flags = readFlags(rest, command);
   const recordDir = process.env.ELENCHUS_RECORD_DIR;
   const gh = recordDir ? recordingGh(cliGh(), recordDir) : cliGh();
@@ -126,6 +145,20 @@ async function main(argv: string[]): Promise<void> {
   }
   if (flags.positional.length !== 1) usage();
   const target = parseTarget(flags.positional[0] ?? "", flags.repoFlag);
+  if (command === "authorize") {
+    const result = await authorize(gh, target.repo, target.pr, {
+      dryRun: flags.dryRun,
+      keychainService: flags.appKeychainService,
+    });
+    if (!result.ok) {
+      process.stdout.write(formatCheck(result.items));
+      process.exitCode = 1;
+    } else {
+      const action = result.posted ? "posted" : "would post";
+      process.stdout.write(`${action} ${result.context} success on ${result.head}\n`);
+    }
+    return;
+  }
   if (command === "handoff") {
     process.stdout.write(await buildHandoff(gh, target.repo, target.pr, flags.config, flags.subject));
     return;
