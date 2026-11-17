@@ -203,6 +203,7 @@ describe("prep refusals", () => {
         records: [seat("0", made.first)],
       }),
     ).rejects.toThrow(new RegExp(`head ${made.second} is not the expected ${made.first}`));
+    expect(existsSync(path.join(made.dir, "seats", "BeniCheni/elenchus/pr-3-pass-1"))).toBe(false);
   });
 
   it("refuses a Cursor route for a read-only pass, and a route that is not in the table", async () => {
