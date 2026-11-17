@@ -65,10 +65,20 @@ describe("Keychain private-key hex decoding", () => {
     const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const pem = privateKey.export({ type: "pkcs8", format: "pem" });
     const output = Buffer.from(Buffer.from(pem).toString("hex") + "\n");
-    const decoded = decodeKeychainPrivateKey(output);
-    expect(createPublicKey(decoded).export({ type: "spki", format: "pem" }))
-      .toBe(publicKey.export({ type: "spki", format: "pem" }));
-    expect(output.every((byte) => byte === 0)).toBe(true);
+    const allocation = vi.spyOn(Buffer, "alloc");
+    try {
+      const decoded = decodeKeychainPrivateKey(output);
+      const bytes = allocation.mock.results.find((result) =>
+        result.type === "return" && Buffer.isBuffer(result.value) && result.value.length === Buffer.byteLength(pem),
+      )?.value as Buffer | undefined;
+      expect(createPublicKey(decoded).export({ type: "spki", format: "pem" }))
+        .toBe(publicKey.export({ type: "spki", format: "pem" }));
+      expect(output.every((byte) => byte === 0)).toBe(true);
+      expect(bytes).toBeDefined();
+      expect(bytes!.every((byte) => byte === 0)).toBe(true);
+    } finally {
+      allocation.mockRestore();
+    }
   });
 
   it("refuses raw PEM and malformed hex with the existing message and clears every input", async () => {
