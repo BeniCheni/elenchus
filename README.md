@@ -1,20 +1,20 @@
 # elenchus
 
-A read-only controller for multi-pass, cross-vendor AI code review on GitHub.
+A controller for multi-pass, cross-vendor AI code review on GitHub.
 
 In a review run this way, each pass of a pull request's review is its own agent session, a
 *seat*, routed to the vendor, model and effort chosen for it: Claude Code, Codex or Cursor. Every
 seat ends its pull-request comment with a *seat record*, a small JSON block saying what it was
 asked to run, what it actually ran, which commits it read and wrote, and what it found. elenchus
 reads those records back from GitHub, checks them against the repository's own rules, and says
-what the review needs next. The pull request is its only state, and it never writes to GitHub.
+what the review needs next. The pull request is its only state.
 
 The name is Socrates' method: a claim stands only if it survives questioning. Here the claim is
 "this pull request was reviewed as routed", and the questions are asked of the records.
 
 ## Status
 
-A working proof of concept, version 0.0.0, not yet published to npm. Two public projects are
+A working proof of concept, version 0.0.0, not published to npm. Two public projects are
 adopting it:
 
 - [keel](https://github.com/BeniCheni/keel), whose seats already post records by hand, read back
@@ -23,9 +23,7 @@ adopting it:
   A replay of one of its reviews is this repository's live fixture, and its own seats start
   posting records after its v0.6.0 release.
 
-Any repository on GitHub can adopt it the same way. Today it reads, checks, prepares seats and
-prints a release block; it does not yet gate a merge or start a seat by itself (see
-[Roadmap](#roadmap)).
+Any repository on GitHub can adopt it the same way.
 
 ## How a review runs
 
@@ -146,19 +144,18 @@ green). Each is required only by the command that uses it.
 [`examples/kickoff.elenchus.json`](examples/kickoff.elenchus.json) is one adopter's complete
 file.
 
-## What it will not do
+## Boundaries
 
-- **Write to GitHub.** Every GitHub call is `gh api --method GET`, behind an allowlist that
-  refuses any other shape before `gh` starts.
-- **Run git beyond what `prep` needs.** git runs only through an allowlist of `prep`'s exact
-  invocations, with hooks turned off; it never pushes, tags, commits or merges. The only other
-  program `prep` runs is `npm ci`.
-- **Release anything.** `handoff` prints the merge, tag and push for a person to run.
+- **GitHub.** Every call goes through `gh api`, behind an allowlist in `src/gh.ts` that refuses
+  any shape it does not list before `gh` starts.
+- **git.** git runs only through an allowlist of `prep`'s exact invocations in `src/git.ts`, with
+  hooks turned off. The only other program `prep` runs is `npm ci`.
+- **Releases.** `handoff` prints the merge, tag and push for a person to run.
 
 Two limits to know. The deny profiles `prep` writes are seatbelts that stop the direct forms,
 not a guarantee: they miss a +refspec push such as `git push origin +HEAD:main`, `--force` after
 the refspec, `--force-with-lease`, `sh -c` and `eval`. And Codex reads a project's rules only
-from a trusted project, which cannot yet be granted for one run without writing `~/.codex`, so a
+from a trusted project, which cannot be granted for one run without writing `~/.codex`, so a
 Codex seat currently runs without a deny profile; `prep` says so. `prep`'s `npm ci` runs the
 pull request's install scripts as you.
 
@@ -184,8 +181,8 @@ and a merge waits for that proof. In order:
 1. **Read the records** — `status` and `check`. Done.
 2. **Prepare the seats** — `prep`, `handoff` and the coverage rule. Done.
 3. **The gate.** `elenchus authorize` and a required status check, proven on this repository's
-   replay before any adopter turns it on. It will be elenchus's one write to GitHub, a commit
-   status, with the credential still to be chosen. `status` already names `authorize` as the
+   replay before any adopter turns it on. It posts a commit status, with the credential still
+   to be chosen. `status` already names `authorize` as the
    step after the last pass. Alongside it, which pass opens findings, which carry them and who
    an escalation goes to move from the code into the configuration.
 4. **Adoption.** A release adopters can pin; the record block in each adopter's review
