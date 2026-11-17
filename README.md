@@ -126,7 +126,8 @@ base's and input commit's recursive trees to reconstruct coverage, with renames 
 as a deletion and an addition. A truncated tree fails the coverage check.
 
 `status` identifies the gate status at the head by App identity. It names statuses from
-other accounts as not counting.
+other accounts as not counting. When a private App's metadata is inaccessible to the GET
+client, the source is reported as UNVERIFIED.
 
 `prep` refuses rather than guess: it names the first earlier pass with no record, a head that
 moved after the last record, a route that is not in the configuration's tables, a vendor that

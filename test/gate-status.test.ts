@@ -22,3 +22,17 @@ it("names no status, a matching App and the non-counting statuses by creator", a
     "success by controller[bot] (App 42), success by admin (does not count), success by other[bot] (does not count)",
   );
 });
+
+it("reports a private App's inaccessible metadata as unverified", async () => {
+  const gh = {
+    async get(path: string) {
+      if (path.includes("/statuses?")) return [{
+        context: "review/ready", state: "success", creator: { login: "private-controller[bot]", type: "Bot" },
+      }];
+      throw new Error("gh: Not Found (HTTP 404)");
+    },
+  };
+  expect(await readGateStatus(gh, "team/repo", "a".repeat(40), {
+    context: "review/ready", app_id: 42, required_checks: [], blocking_unverified: [],
+  })).toBe("success by private-controller[bot] (source UNVERIFIED; App metadata unavailable)");
+});

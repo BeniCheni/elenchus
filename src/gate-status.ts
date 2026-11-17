@@ -18,8 +18,11 @@ export async function readGateStatus(gh: GhClient, repo: string, head: string, g
     if (seen.has(login)) continue;
     seen.add(login);
     const slug = status.creator?.type === "Bot" ? /^([a-z0-9-]+)\[bot\]$/i.exec(login)?.[1] : undefined;
-    if (slug && gate.app_id !== undefined && await matchesApp(gh, slug, gate.app_id)) {
+    const matches = slug && gate.app_id !== undefined ? await matchesApp(gh, slug, gate.app_id) : false;
+    if (matches === true) {
       configured = `${status.state} by ${login} (App ${gate.app_id})`;
+    } else if (matches === null) {
+      foreign.push(`${status.state} by ${login} (source UNVERIFIED; App metadata unavailable)`);
     } else {
       foreign.push(`${status.state} by ${login} (does not count)`);
     }
@@ -27,12 +30,12 @@ export async function readGateStatus(gh: GhClient, repo: string, head: string, g
   return [configured, ...foreign].filter(Boolean).join(", ") || "no status";
 }
 
-async function matchesApp(gh: GhClient, slug: string, id: number): Promise<boolean> {
+async function matchesApp(gh: GhClient, slug: string, id: number): Promise<boolean | null> {
   try {
     const app = await gh.get(`/apps/${encodeURIComponent(slug)}`) as { id?: number };
     return app.id === id;
   } catch (error) {
-    if (error instanceof Error && error.message.includes("HTTP 404")) return false;
+    if (error instanceof Error && error.message.includes("HTTP 404")) return null;
     throw error;
   }
 }
