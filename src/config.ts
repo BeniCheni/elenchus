@@ -1,4 +1,4 @@
-import type { Config, HandoffConfig, InstallConfig, SeatKind, VendorConfig } from "./types.js";
+import type { Config, FindingFlow, GateConfig, HandoffConfig, InstallConfig, SeatKind, VendorConfig } from "./types.js";
 
 const SEAT_KINDS: readonly SeatKind[] = ["writing", "read-only", "none"];
 
@@ -38,6 +38,8 @@ export function parseConfig(value: unknown): Config {
   for (const [name, entry] of Object.entries(raw.vendors as Record<string, unknown>)) {
     vendors[name] = parseVendor(name, entry);
   }
+  const passIds = passes.map(({ id }) => id);
+  const escalation = optionalString(raw.escalate_to, "config.escalate_to");
   return {
     passes,
     vendors,
@@ -46,7 +48,92 @@ export function parseConfig(value: unknown): Config {
     ...(raw.forbidden !== undefined ? { forbidden: stringList(raw.forbidden, "config.forbidden") } : {}),
     ...(raw.installs !== undefined ? { installs: parseInstalls(raw.installs) } : {}),
     ...(raw.handoff !== undefined ? { handoff: parseHandoff(raw.handoff) } : {}),
+    ...(raw.finding_flow !== undefined ? { finding_flow: parseFindingFlow(raw.finding_flow, passIds) } : {}),
+    ...(escalation !== undefined ? { escalate_to: escalation } : {}),
+    ...(raw.gate !== undefined ? { gate: parseGate(raw.gate, passIds) } : {}),
   };
+}
+
+function parseFindingFlow(value: unknown, passIds: string[]): FindingFlow {
+  const label = "config.finding_flow";
+  const raw = object(value, label);
+  const opens = configuredPass(raw.opens, `${label}.opens`, passIds);
+  const carries = stringList(raw.carries, `${label}.carries`)
+    .map((id) => configuredPass(id, `${label}.carries`, passIds));
+  const ordered = [opens, ...carries];
+  const ruling = raw.ruling === undefined ? undefined : configuredPass(raw.ruling, `${label}.ruling`, passIds);
+  if (ruling !== undefined) ordered.push(ruling);
+  if (ordered.some((id, i) => i > 0 && passIds.indexOf(id) <= passIds.indexOf(ordered[i - 1]!))) {
+    throw new Error(`${label} passes must follow config.passes order`);
+  }
+  return { opens, carries, ...(ruling !== undefined ? { ruling } : {}) };
+}
+
+function parseGate(value: unknown, passIds: string[]): GateConfig {
+  const label = "config.gate";
+  const raw = object(value, label);
+  const context = nonemptyString(raw.context, `${label}.context`);
+  const appId = raw.app_id === undefined ? undefined : positiveId(raw.app_id, `${label}.app_id`);
+  if (!Array.isArray(raw.required_checks)) throw new Error(`${label}.required_checks must be an array`);
+  const requiredChecks = raw.required_checks.map((entry, index) => {
+    const field = `${label}.required_checks[${index}]`;
+    const check = object(entry, field);
+    return {
+      name: nonemptyString(check.name, `${field}.name`),
+      ...(check.app_id !== undefined ? { app_id: positiveId(check.app_id, `${field}.app_id`) } : {}),
+    };
+  });
+  const blockingUnverified = stringList(raw.blocking_unverified, `${label}.blocking_unverified`).map((rule) => {
+    if (rule !== "coverage" && rule !== "route") throw new Error(`${label}.blocking_unverified has unknown rule ${rule}`);
+    return rule;
+  });
+  const changes = raw.allowed_changes === undefined
+    ? undefined
+    : parseAllowedChanges(raw.allowed_changes, passIds);
+  return {
+    context,
+    ...(appId !== undefined ? { app_id: appId } : {}),
+    required_checks: requiredChecks,
+    blocking_unverified: blockingUnverified,
+    ...(changes ? { allowed_changes: changes } : {}),
+  };
+}
+
+function parseAllowedChanges(value: unknown, passIds: string[]): NonNullable<GateConfig["allowed_changes"]> {
+  const label = "config.gate.allowed_changes";
+  const raw = object(value, label);
+  const version = raw.version_only === undefined ? undefined : object(raw.version_only, `${label}.version_only`);
+  return {
+    paths: stringList(raw.paths, `${label}.paths`),
+    reread_pass: configuredPass(raw.reread_pass, `${label}.reread_pass`, passIds),
+    ...(version ? { version_only: {
+      file: nonemptyString(version.file, `${label}.version_only.file`),
+      tests: stringList(version.tests, `${label}.version_only.tests`),
+    } } : {}),
+  };
+}
+
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+function nonemptyString(value: unknown, label: string): string {
+  const parsed = optionalString(value, label);
+  if (parsed === undefined) throw new Error(`${label} must be a string`);
+  return parsed;
+}
+
+function positiveId(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function configuredPass(value: unknown, label: string, passIds: string[]): string {
+  if (typeof value !== "string" || !passIds.includes(value)) throw new Error(`${label} must name a configured pass`);
+  return value;
 }
 
 function parseVendor(name: string, value: unknown): VendorConfig {

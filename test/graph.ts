@@ -10,6 +10,13 @@ export function kickoffConfig(): Config {
   return parseConfig(JSON.parse(readFileSync(file, "utf8")) as unknown);
 }
 
+export function replayConfig(): Config {
+  const captured = new URL("./fixtures/replay-p9/%252Frepos%252FBeniCheni%252Felenchus%252Fcontents%252F.elenchus.json%253Fref%253Dreplay%252Fmain.json", import.meta.url);
+  const { content } = JSON.parse(readFileSync(captured, "utf8")) as { content: string };
+  const { vendors } = parseConfig(JSON.parse(Buffer.from(content, "base64").toString("utf8")) as unknown);
+  return { ...kickoffConfig(), vendors };
+}
+
 export function comment(id: number, body: string, createdAt: string, login = "BeniCheni"): GhComment {
   return {
     id,

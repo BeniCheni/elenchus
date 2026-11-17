@@ -6,7 +6,7 @@ import { extractRecord } from "../src/records.js";
 import { buildCheck, buildStatus } from "../src/report.js";
 import { validateSeatRecord } from "../src/schema.js";
 import type { SeatRecord } from "../src/types.js";
-import { comment, graphGh, kickoffConfig, type Node } from "./graph.js";
+import { comment, graphGh, replayConfig, type Node } from "./graph.js";
 
 const full = {
   ddd9a37: "ddd9a37efc68fc09709bda0c48895f952d805233",
@@ -70,7 +70,7 @@ async function checkRecords(records: SeatRecord[], head: string, baseSha: string
     graphGh({ head, baseSha, comments, nodes }),
     "BeniCheni/elenchus",
     1,
-    kickoffConfig(),
+    replayConfig(),
   );
   return formatCheck(buildCheck(state));
 }
@@ -137,7 +137,7 @@ describe("transcribed #320 records", () => {
       }),
       "BeniCheni/elenchus",
       1,
-      kickoffConfig(),
+      replayConfig(),
     );
     const status = formatStatus(buildStatus(state));
     const check = formatCheck(buildCheck(state));

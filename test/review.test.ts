@@ -25,8 +25,8 @@ function seat(over: Partial<SeatRecord> & Pick<SeatRecord, "pass">): SeatRecord 
     seat_record: 1,
     pr: 320,
     runtime: "Claude Code",
-    model: { requested: "Fable 5.2", observed: "Fable 5.2", source: "transcribed: test" },
-    effort: { requested: "Extra", observed: "Extra", source: "transcribed: test" },
+    model: { requested: "claude-fable-5-2", observed: "claude-fable-5-2", source: "transcribed: test" },
+    effort: { requested: "xhigh", observed: "xhigh", source: "transcribed: test" },
     route: { recommended_by: "PM", confirmed_by: null },
     posted_by: "BeniCheni",
     input_sha: A,
@@ -73,7 +73,7 @@ describe("status and check", () => {
       comment(1, bad, "2026-11-14T00:00:01Z"),
       comment(2, bad, "2026-11-14T00:00:02Z"),
     ]);
-    expect(twice.status).toContain("first resubmission failed; back to the seat");
+    expect(twice.status).toContain("record rejected after 2 failed attempt(s); back to the seat");
     expect(twice.status).not.toContain("escalate to Beni");
 
     const thrice = await review([
@@ -147,7 +147,7 @@ describe("status and check", () => {
     const { check } = await review([
       comment(1, fenced(seat({ pass: "0" })), "2026-11-14T00:00:01Z"),
       comment(2, fenced(seat({ pass: "1", input_sha: A, output_sha: B, commits: [B] })), "2026-11-14T00:00:02Z"),
-      comment(3, fenced(seat({ pass: "2", runtime: "Cursor", input_sha: B, output_sha: C, commits: [C], model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 Extra High", source: "test" }, effort: { requested: "xhigh", observed: "Extra High", source: "test" } })), "2026-11-14T00:00:03Z"),
+      comment(3, fenced(seat({ pass: "2", runtime: "Cursor", input_sha: B, output_sha: C, commits: [C], model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 256K Extra High", source: "test" }, effort: { requested: "xhigh", observed: "Extra High", source: "test" } })), "2026-11-14T00:00:03Z"),
     ], C, A);
     expect(check).toMatch(/FAIL sequence pass 2 .*skipped pass 1\.5/);
   });
@@ -205,7 +205,7 @@ describe("status and check", () => {
           input_sha: A,
           output_sha: C,
           commits: [C],
-          model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 Extra High", source: "test" },
+          model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 256K Extra High", source: "test" },
           effort: { requested: "xhigh", observed: "Extra High", source: "test" },
         })), "2026-11-14T00:00:02Z"),
       ],
@@ -228,7 +228,7 @@ describe("status and check", () => {
         input_sha: A,
         output_sha: C,
         commits: [C],
-        model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 Extra High", source: "test" },
+        model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 256K Extra High", source: "test" },
         effort: { requested: "xhigh", observed: "Extra High", source: "test" },
       })), "2026-11-14T00:00:02Z"),
     ], C, B);
@@ -480,7 +480,7 @@ describe("v1.2 passes and re-reads", () => {
   });
 
   it("accepts a later re-read of an earlier pass and checks its route in place of the original", async () => {
-    const original = modern("cold", A, { model: { requested: "Fable 5.2", observed: "other" } });
+    const original = modern("cold", A, { model: { requested: "claude-fable-5-2", observed: "other" } });
     const { check, status } = await verify([original, modern("finish", A), modern("cold", B, { reread: true })]);
     expect(check).toBe("ok\n");
     expect(status).toContain("issuecomment-3");
@@ -497,4 +497,30 @@ describe("v1.2 passes and re-reads", () => {
     const { check } = await verify(records, C);
     expect(check).toMatch(error);
   });
+});
+
+it("requires a matching model and effort to be listed in the vendor table", async () => {
+  const unlisted = [
+    comment(1, fenced(seat({
+      pass: "0",
+      model: { requested: "unlisted", observed: "unlisted" },
+      effort: { requested: "unlisted", observed: "unlisted" },
+    })), "2026-11-14T00:00:01Z"),
+  ];
+  const { check } = await review(unlisted);
+  expect(check.match(/FAIL route/g)).toHaveLength(2);
+  expect(check).toMatch(/model requested unlisted observed unlisted/);
+  expect(check).toMatch(/effort requested unlisted observed unlisted/);
+});
+
+it("uses the configured addressee and retry cap", async () => {
+  const config = { ...kickoffConfig(), retry_cap: 0, escalate_to: "Rae" };
+  const gh = graphGh({
+    head: A, baseSha: A, nodes,
+    comments: [comment(1, fenced({ seat_record: 1, pass: "0" }), "2026-11-14T00:00:01Z")],
+  });
+  const state = await loadReview(gh, "BeniCheni/elenchus", 1, config);
+  expect(formatStatus(buildStatus(state))).toContain("next: escalate to Rae");
+  expect(formatStatus(buildStatus(state))).toContain("retry cap 0 after 1 failed attempts");
+  expect(formatCheck(buildCheck(state))).toContain("escalate to Rae");
 });

@@ -53,7 +53,7 @@ describe("the built command", () => {
 
   it("exits 0 when check has no failure", () => {
     const bin = fakeGh(mkdtempSync(path.join(tmpdir(), "elenchus-cli-")));
-    const result = run(["check", "BeniCheni/elenchus#1", "--config", "examples/kickoff.elenchus.json"], {
+    const result = run(["check", "BeniCheni/elenchus#1"], {
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       FIXTURE_DIR: path.join(root, "test/fixtures/replay-p9"),
     });

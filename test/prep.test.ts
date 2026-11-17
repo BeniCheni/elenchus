@@ -12,7 +12,7 @@ import { loadReview } from "../src/load.js";
 import { defaultRun, openSeatMessage, prepareSeat, prepGitEnv, type Runner } from "../src/prep.js";
 import { buildCheck } from "../src/report.js";
 import type { Config, GhComment, SeatRecord } from "../src/types.js";
-import { comment, fenced, graphGh, kickoffConfig, type Node } from "./graph.js";
+import { comment, fenced, graphGh, kickoffConfig, replayConfig, type Node } from "./graph.js";
 
 const dirs: string[] = [];
 
@@ -157,6 +157,7 @@ async function prep(over: {
   model?: string;
   effort?: string;
   symlinkOutside?: string;
+  configOverride?: Config;
 }) {
   return prepareSeat({
     gh: client(over.head, over.records ?? []),
@@ -168,7 +169,7 @@ async function prep(over: {
     effort: over.effort ?? route.effort,
     confirmedBy: route.confirmedBy,
     root: over.root,
-    config: config(),
+    config: over.configOverride ?? config(),
     cloneUrl: over.url,
     run: runner(over.root, over.pass ?? "1", over.symlinkOutside),
   });
@@ -401,6 +402,7 @@ describe("prep refusals", () => {
       url: made.url,
       root: path.join(made.dir, "seats"),
       model: "Opus 5.5",
+      configOverride: { ...config(), vendors: replayConfig().vendors },
       records: [seat("0", made.second)],
     });
     expect(report.launch).toContain("claude --model 'Opus 5.5' --effort 'xhigh'");

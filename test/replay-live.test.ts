@@ -23,7 +23,7 @@ describe("captured replay at P9", () => {
     const state = await loadReview(fixtureGh(), "BeniCheni/elenchus", 1);
     const status = formatStatus(buildStatus(state));
     const check = formatCheck(buildCheck(state));
-    expect(status).toBe(readFileSync(path.join(dir, "status.txt"), "utf8"));
+    expect(status).toBe(readFileSync(path.join(dir, "status.txt"), "utf8").replace("Sprint 3 builds authorize", "no gate configured"));
     expect(check).toBe(readFileSync(path.join(dir, "check.txt"), "utf8"));
     expect(status).toContain("next: authorize");
     expect(check).not.toMatch(/FAIL /);

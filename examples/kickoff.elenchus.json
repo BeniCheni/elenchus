@@ -13,14 +13,13 @@
       "authors": ["Claude <noreply@anthropic.com>"],
       "runtimes": ["Claude Code", "claude -p"],
       "models": {
-        "claude-fable-5-2": ["claude-fable-5-2", "Fable 5.2"],
+        "claude-fable-5-2": ["claude-fable-5-2"],
         "claude-haiku-5-5": ["claude-haiku-5-5"],
         "claude-sonnet-5-5": ["claude-sonnet-5-5"],
-        "haiku": ["claude-haiku-5-5", "haiku"],
-        "Opus 5.5": ["Opus 5.5"]
+        "haiku": ["claude-haiku-5-5", "haiku"]
       },
       "efforts": {
-        "xhigh": ["xhigh", "Extra"],
+        "xhigh": ["xhigh"],
         "high": ["high"],
         "medium": ["medium"],
         "low": ["low"]
@@ -48,8 +47,7 @@
       "models": {
         "grok-4.7-xhigh": [
           "grok-4.7-xhigh",
-          "Grok 4.7 256K Extra High",
-          "Grok 4.7 Extra High"
+          "Grok 4.7 256K Extra High"
         ],
         "grok-4.7-high": ["grok-4.7-high", "Grok 4.7 256K High"],
         "grok-4.7-medium": ["grok-4.7-medium", "Grok 4.7 256K Medium"],
@@ -62,6 +60,21 @@
         "low": ["low", "Low"]
       },
       "read_only_seat": false
+    }
+  },
+  "finding_flow": { "opens": "1", "carries": ["2", "2.5"], "ruling": "3" },
+  "escalate_to": "Beni",
+  "gate": {
+    "context": "kickoff/360",
+    "required_checks": [{ "name": "verify", "app_id": 15368 }],
+    "blocking_unverified": ["coverage"],
+    "allowed_changes": {
+      "paths": ["package.json", "package-lock.json", "CHANGELOG.md", "**/README.md", "CLAUDE.md", "docs/**"],
+      "reread_pass": "2.5",
+      "version_only": {
+        "file": "package.json",
+        "tests": ["**/*.test.*", "**/*.spec.*", "**/test/**", "**/tests/**"]
+      }
     }
   },
   "retry_cap": 2,

@@ -99,6 +99,28 @@ export type VendorConfig = {
   binary?: string;
 };
 
+export type FindingFlow = {
+  opens: string;
+  carries: string[];
+  ruling?: string;
+};
+
+export type RequiredCheck = { name: string; app_id?: number };
+
+export type AllowedChanges = {
+  paths: string[];
+  reread_pass: string;
+  version_only?: { file: string; tests: string[] };
+};
+
+export type GateConfig = {
+  context: string;
+  app_id?: number;
+  required_checks: RequiredCheck[];
+  blocking_unverified: ("coverage" | "route")[];
+  allowed_changes?: AllowedChanges;
+};
+
 export type Config = {
   passes: PassConfig[];
   vendors: Record<string, VendorConfig>;
@@ -109,6 +131,9 @@ export type Config = {
   forbidden?: string[];
   installs?: InstallConfig[];
   handoff?: HandoffConfig;
+  finding_flow?: FindingFlow;
+  escalate_to?: string;
+  gate?: GateConfig;
 };
 
 export type GhComment = {

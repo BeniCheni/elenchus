@@ -60,21 +60,21 @@ function nextStep(state: ReviewState, firstOpen: PassState | undefined): StatusV
       step: "authorize",
       seat: null,
       role: null,
-      blocked: "Sprint 3 builds authorize",
+      blocked: state.config.gate ? "authorization required" : "no gate configured",
       options: null,
     };
   }
   if (firstOpen.outcome.kind === "rejected") {
     if (firstOpen.outcome.failures > state.config.retry_cap) {
       return {
-        step: "escalate to Beni",
+        step: escalateTo(state.config),
         seat: null,
         role: null,
-        blocked: `pass ${firstOpen.id} second failed resubmission`,
+        blocked: `pass ${firstOpen.id} exceeded retry cap ${state.config.retry_cap} after ${firstOpen.outcome.failures} failed attempts`,
         options: null,
       };
     }
-    const which = firstOpen.outcome.failures <= 1 ? "record rejected; back to the seat" : "first resubmission failed; back to the seat";
+    const which = `record rejected after ${firstOpen.outcome.failures} failed attempt(s); back to the seat`;
     return {
       step: firstOpen.id,
       seat: firstOpen.seat,
@@ -278,10 +278,12 @@ function checkFindings(state: ReviewState, items: CheckItem[]): void {
       seen.add(id);
     }
   }
-  const pass1 = recorded(state, "1");
-  if (!pass1) return;
-  const opened = pass1.outcome.kind === "recorded" ? pass1.outcome.record.findings.map((finding) => finding.id) : [];
-  for (const id of ["2", "2.5"]) {
+  const flow = state.config.finding_flow;
+  if (!flow) return;
+  const opener = recorded(state, flow.opens);
+  if (opener?.outcome.kind !== "recorded") return;
+  const opened = opener.outcome.record.findings.map((finding) => finding.id);
+  for (const id of flow.carries) {
     const later = recorded(state, id);
     if (!later || later.outcome.kind !== "recorded") continue;
     const have = new Set(later.outcome.record.findings.map((finding) => finding.id));
@@ -293,7 +295,7 @@ function checkFindings(state: ReviewState, items: CheckItem[]): void {
           pass: id,
           finding,
           comment: later.outcome.commentUrl,
-          message: `finding ${finding} opened in pass 1 is missing`,
+          message: `finding ${finding} opened in pass ${flow.opens} is missing`,
         });
       }
     }
@@ -329,8 +331,7 @@ function checkObserved(
     });
     return;
   }
-  if (observed.observed === observed.requested) return;
-  if (table?.[observed.requested]?.includes(observed.observed)) return;
+  if (table && Object.hasOwn(table, observed.requested) && table[observed.requested]?.includes(observed.observed)) return;
   items.push({
     severity: "fail",
     rule: "route",
@@ -356,6 +357,10 @@ function checkPostedBy(state: ReviewState, items: CheckItem[]): void {
   }
 }
 
+function escalateTo(config: Config): string {
+  return `escalate to ${config.escalate_to ?? "the maintainer"}`;
+}
+
 function checkRetries(state: ReviewState, items: CheckItem[]): void {
   for (const pass of state.passes) {
     if (pass.outcome.kind === "rejected") {
@@ -366,7 +371,7 @@ function checkRetries(state: ReviewState, items: CheckItem[]): void {
         pass: pass.id,
         comment: pass.outcome.commentUrl,
         message: escalate
-          ? `escalate to Beni: ${pass.outcome.reason}`
+          ? `${escalateTo(state.config)}: ${pass.outcome.reason}`
           : `${pass.outcome.reason}; back to the seat`,
       });
       continue;
