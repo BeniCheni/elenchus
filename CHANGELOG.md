@@ -905,3 +905,5 @@ trail is `docs/v0.0.3-*.md`).
 - The rewrite: generated-and-diffed fixture data replaces a hand-typed dashboard whose
   audit found ~20 wrong rows. Zod validation at the provider boundary, UTC-instant
   storage, snapshot diffing with urgency exit codes.
+
+Gate fixture documentation-only checkpoint.
