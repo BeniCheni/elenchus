@@ -15,7 +15,7 @@ function usage(): never {
   console.error("usage: elenchus status <owner/repo#n | pull-url> [--json] [--repo owner/repo] [--config file]");
   console.error("       elenchus check  <owner/repo#n | pull-url> [--repo owner/repo] [--config file]");
   console.error("       elenchus prep <owner/repo#n | n> <pass> --runtime <vendor> --model <id> --effort <word> --confirmed-by <name> [--root <dir>] [--repo owner/repo] [--config file]");
-  console.error("       elenchus handoff <owner/repo#n | n> [--repo owner/repo] [--config file]");
+  console.error("       elenchus handoff <owner/repo#n | n> [--repo owner/repo] [--config file] [--subject text]");
   process.exit(2);
 }
 
@@ -40,6 +40,7 @@ type Flags = {
   effort?: string;
   confirmedBy?: string;
   root?: string;
+  subject?: string;
   positional: string[];
 };
 
@@ -52,6 +53,7 @@ function readFlags(argv: string[], command: string): Flags {
   let effort: string | undefined;
   let confirmedBy: string | undefined;
   let root: string | undefined;
+  let subject: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? "";
@@ -73,6 +75,10 @@ function readFlags(argv: string[], command: string): Flags {
     else if (arg === "--effort") effort = take("--effort");
     else if (arg === "--confirmed-by") confirmedBy = take("--confirmed-by");
     else if (arg === "--root") root = take("--root");
+    else if (arg === "--subject") {
+      if (command !== "handoff") usage();
+      subject = take("--subject");
+    }
     else if (arg.startsWith("-")) {
       console.error(`unknown flag ${arg}`);
       usage();
@@ -88,6 +94,7 @@ function readFlags(argv: string[], command: string): Flags {
     ...(effort ? { effort } : {}),
     ...(confirmedBy ? { confirmedBy } : {}),
     ...(root ? { root } : {}),
+    ...(subject ? { subject } : {}),
     positional,
   };
 }
@@ -119,7 +126,7 @@ async function main(argv: string[]): Promise<void> {
   if (flags.positional.length !== 1) usage();
   const target = parseTarget(flags.positional[0] ?? "", flags.repoFlag);
   if (command === "handoff") {
-    process.stdout.write(await buildHandoff(gh, target.repo, target.pr, flags.config));
+    process.stdout.write(await buildHandoff(gh, target.repo, target.pr, flags.config, flags.subject));
     return;
   }
   const state = await loadReview(gh, target.repo, target.pr, flags.config);

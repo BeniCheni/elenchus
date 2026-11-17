@@ -2,6 +2,8 @@ import type { GhClient } from "./gh.js";
 import { loadReview } from "./load.js";
 import { buildCheck } from "./report.js";
 import { formatCheck } from "./format.js";
+import { shellQuote } from "./quote.js";
+import { sameSha } from "./sha.js";
 import type { Config, GhContent, HandoffConfig } from "./types.js";
 
 export async function buildHandoff(
@@ -9,6 +11,7 @@ export async function buildHandoff(
   repo: string,
   pr: number,
   config?: Config,
+  subjectOverride?: string,
 ): Promise<string> {
   const state = await loadReview(gh, repo, pr, config);
   const handoff = state.config.handoff;
@@ -20,17 +23,25 @@ export async function buildHandoff(
   if (failures.length > 0) {
     throw new Error(`check failed:\n${formatCheck(failures).trimEnd()}`);
   }
+  const last = state.passes[state.passes.length - 1];
+  const lastOutput = last?.outcome.kind === "recorded" ? last.outcome.record.output_sha : "";
+  if (!lastOutput || !sameSha(state.head, lastOutput)) {
+    throw new Error(`head ${state.head} is not the last recorded output_sha ${lastOutput || "none"}`);
+  }
   const headVersion = readVersion(await readContents(gh, repo, handoff.version_file, state.head));
   const baseVersion = readVersion(await readContents(gh, repo, handoff.version_file, state.baseSha));
   if (headVersion === baseVersion) {
     throw new Error(`version did not change: ${handoff.version_file} is ${headVersion} at the head and the base`);
   }
-  const changelog = await readContents(gh, repo, handoff.changelog, state.head);
   const heading = substitute(handoff.section_heading, { version: headVersion }, (value) => value);
-  const subject = changelogSubject(changelog, heading);
+  const subject = subjectOverride?.trim()
+    ? subjectOverride.trim()
+    : changelogSubject(await readContents(gh, repo, handoff.changelog, state.head), heading);
   if (!subject) throw new Error(`changelog has no section for ${headVersion}`);
-  return renderBlock(handoff, pr, headVersion, subject);
+  return renderBlock(handoff, pr, headVersion, subject, repo, state.head);
 }
+
+const ABBREVIATIONS = new Set(["vs", "e.g", "i.e", "mr", "mrs", "ms", "dr", "st", "jr", "sr", "etc", "fig", "al", "prof"]);
 
 export function changelogSubject(changelog: string, headingPrefix: string): string | null {
   const lines = changelog.split(/\r?\n/);
@@ -38,33 +49,61 @@ export function changelogSubject(changelog: string, headingPrefix: string): stri
   if (index < 0) return null;
   const paragraph: string[] = [];
   for (const line of lines.slice(index + 1)) {
-    if (line.trim() === "") {
+    const trimmed = line.trim();
+    if (trimmed === "") {
       if (paragraph.length > 0) break;
       continue;
     }
-    if (line.startsWith("## ")) break;
-    paragraph.push(line.trim());
+    if (/^#{3,6}\s/.test(trimmed)) continue;
+    if (/^#{1,2}\s/.test(trimmed)) break;
+    paragraph.push(trimmed);
   }
   const text = paragraph.join(" ");
   if (!text) return null;
-  const sentence = text.match(/^[\s\S]*?[.!?](?=\s|$)/);
-  return sentence?.[0] ?? text;
+  return firstSentence(text);
 }
 
-export function renderBlock(handoff: HandoffConfig, pr: number, version: string, subject: string): string {
-  const values = { version, subject };
+/** The first sentence, skipping a period that belongs to an abbreviation such as "vs.". */
+function firstSentence(text: string): string {
+  for (let i = 0; i < text.length; i += 1) {
+    const mark = text[i];
+    if (mark !== "." && mark !== "!" && mark !== "?") continue;
+    const next = text[i + 1];
+    if (next !== undefined && !/\s/.test(next)) continue;
+    if (mark === "." && abbreviationBefore(text.slice(0, i))) continue;
+    return text.slice(0, i + 1);
+  }
+  return text;
+}
+
+function abbreviationBefore(before: string): boolean {
+  const word = before.match(/([A-Za-z]+(?:\.[A-Za-z]+)*)$/);
+  if (!word?.[1]) return false;
+  return ABBREVIATIONS.has(word[1].toLowerCase());
+}
+
+export function renderBlock(
+  handoff: HandoffConfig,
+  pr: number,
+  version: string,
+  subject: string,
+  repo: string,
+  head: string,
+): string {
+  const values = { version, subject, repo, head };
   const tag = fillRaw(handoff.tag, values);
   const tagMessage = fillRaw(handoff.tag_message, values);
   const mergeMessage = fillRaw(handoff.merge_message, values);
   const merge = fillCommand(handoff.merge_command, { ...values, pr: String(pr), merge_message: mergeMessage, tag });
   const lines = [
     merge,
-    `git tag -a ${shellQuote(tag)} -m ${shellQuote(tagMessage)}`,
-    `git push origin ${shellQuote(tag)}`,
-    "git pull",
+    "git fetch origin main",
+    "git merge --ff-only origin/main",
+    `git tag -a ${shellQuote(tag)} "$(git rev-parse origin/main)" -m ${shellQuote(tagMessage)}`,
+    `git push origin ${shellQuote(`refs/tags/${tag}`)}`,
     ...handoff.green,
   ];
-  return `${lines.join("\n")}\n`;
+  return `${lines.join(" &&\n")}\n`;
 }
 
 function fillRaw(template: string, values: Record<string, string>): string {
@@ -81,10 +120,6 @@ function substitute(template: string, values: Record<string, string>, encode: (v
     if (value === undefined) throw new Error(`handoff template ${token} has no value`);
     return encode(value);
   });
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 function readVersion(text: string): string {
