@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commentBody, replayRecords } from "../examples/replay/records.js";
+import { commentBody, prepReplayRecord, replayRecords } from "../examples/replay/records.js";
 import { formatCheck, formatStatus } from "../src/format.js";
 import { loadReview } from "../src/load.js";
 import { extractRecord } from "../src/records.js";
@@ -144,4 +144,23 @@ describe("transcribed #320 records", () => {
     expect(status).toContain(`head ${child} does not equal last output_sha dcb914e`);
     expect(check).not.toMatch(/FAIL /);
   });
+});
+
+it("keeps replay PR numbers and source qualifications faithful to their fixtures", () => {
+  expect(replayRecords.every(({ record }) => record.pr === 1)).toBe(true);
+  expect(prepReplayRecord.record.pr).toBe(3);
+  expect(validateSeatRecord(prepReplayRecord.record).ok).toBe(true);
+  for (const pass of ["0", "1.5"]) {
+    expect(replayRecords.find((entry) => entry.pass === pass)!.record.model.requested).toBe(null);
+  }
+  const rebuttal = replayRecords.find((entry) => entry.pass === "2")!.record;
+  expect(rebuttal.findings.filter(({ id }) => id === "N1" || id === "N2").every(({ disposition }) => disposition === undefined)).toBe(true);
+  const synthesis = replayRecords.find((entry) => entry.pass === "2.5")!.record;
+  expect(synthesis.findings.find(({ id }) => id === "6")!.severity).toBe("medium, not fixed → low");
+  expect(synthesis.findings.filter(({ id }) => ["7", "9", "N1", "N2"].includes(id))
+    .every(({ disposition }) => disposition === undefined)).toBe(true);
+  expect(replayRecords.at(-1)!.record.not_verified).not.toContain("vercel-smoke was left red until main carries the script.");
+  for (const entry of [...replayRecords, prepReplayRecord]) {
+    expect(commentBody(entry)).not.toContain("kickoff#");
+  }
 });
