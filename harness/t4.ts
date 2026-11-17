@@ -121,7 +121,7 @@ function allowlistedEnv(): NodeJS.ProcessEnv {
   const tmp = process.env.TMPDIR;
   if (!tmp) throw new Error("TMPDIR is not set");
   return {
-    PATH: `${bin}${path.delimiter}/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin`,
+    PATH: `${bin}${path.delimiter}${path.join(home, ".local", "bin")}${path.delimiter}/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin`,
     HOME: home,
     USER: process.env.USER ?? "",
     LOGNAME: process.env.LOGNAME ?? process.env.USER ?? "",
@@ -344,12 +344,17 @@ function matches(command: string, requested: string): boolean {
   return command.includes(requested);
 }
 
+function bestCommand(record: VendorRecord, requested: string): CommandHit | undefined {
+  const hits = record.commands.filter((item) => matches(item.command, requested));
+  return hits.find((item) => item.output.trim().length > 0 || item.exitCode !== null) ?? hits.at(-1);
+}
+
 function commandVerdict(requested: string, record: VendorRecord): { verdict: string; source: string; detail: string } {
   const denial = record.denials.find((item) => JSON.stringify(item).includes(requested));
   if (denial) {
     return { verdict: "refused", source: "permission_denials", detail: JSON.stringify(denial).slice(0, 500) };
   }
-  const ran = record.commands.find((item) => matches(item.command, requested));
+  const ran = bestCommand(record, requested);
   if (ran) {
     return {
       verdict: "ran",
@@ -365,7 +370,7 @@ function commandVerdict(requested: string, record: VendorRecord): { verdict: str
 }
 
 function ghResolution(record: VendorRecord): { resolved: string | null; stub: boolean } {
-  const ran = record.commands.find((item) => matches(item.command, "command -v gh"));
+  const ran = bestCommand(record, "command -v gh");
   const line = (ran?.output ?? "")
     .split("\n")
     .map((item) => item.trim())
