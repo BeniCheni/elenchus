@@ -111,6 +111,7 @@ function parseAttempts(
   known: Set<string>,
 ): { attempts: Attempt[]; notices: Notice[]; unreadable: UnreadableEvent[] } {
   const ordered = [...comments].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
+  const passOrder = new Map(config.passes.map(({ id }, index) => [id, index]));
   const attempts: Attempt[] = [];
   const latestByPass = new Map<string, RecordedPosting>();
   const notices: Notice[] = [];
@@ -162,9 +163,15 @@ function parseAttempts(
     if (pass !== null && (known.has(pass) || result.ok)) {
       const record = result.ok ? result.record : null;
       const prior = latestByPass.get(pass);
-      const reason = record ? rereadError(record, prior?.record) : (result.ok ? null : result.reason);
-      const replaces = record && prior && !record.reread && usesCurrentSchema(record, prior.record) && sameRange(record, prior.record)
+      let reason = record ? rereadError(record, prior?.record) : (result.ok ? null : result.reason);
+      const replaces = record && reason === null && prior && !record.reread &&
+        usesCurrentSchema(record, prior.record) && sameRange(record, prior.record)
         ? prior.id : undefined;
+      const position = passOrder.get(pass);
+      if (replaces !== undefined && position !== undefined &&
+          [...latestByPass.keys()].some((id) => (passOrder.get(id) ?? -1) > position)) {
+        reason = "a repeat after a later pass has recorded must be marked as a re-read";
+      }
       if (record && reason === null) {
         latestByPass.set(pass, { record, id: comment.id, createdAt: comment.created_at, commentUrl: comment.html_url });
         if (replaces !== undefined) notices.push({
@@ -181,7 +188,7 @@ function parseAttempts(
         valid: reason === null,
         reason,
         record: reason === null ? record : null,
-        ...(replaces === undefined ? {} : { replaces }),
+        ...(replaces === undefined || reason !== null ? {} : { replaces }),
       });
       continue;
     }

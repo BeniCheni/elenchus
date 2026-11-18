@@ -494,13 +494,17 @@ describe("v1.2 passes and re-reads", () => {
   it("accepts and names a same-range correction without changing sequence or a re-read's place", async () => {
     const original = modern("cold", A, { model: { requested: "claude-fable-5-2", observed: "other" } });
     const corrected = modern("cold", A);
-    const { check, status } = await verify([original, modern("finish", A), corrected], A);
-    expect(check).toBe("NOTICE record replacement pass cold comment 3 replaces comment 1 at the same SHAs\n");
-    expect(status).toContain("pass cold comment 3 replaces comment 1 at the same SHAs");
+    const { check, status } = await verify([original, corrected, modern("finish", A)], A);
+    expect(check).toBe("NOTICE record replacement pass cold comment 2 replaces comment 1 at the same SHAs\n");
+    expect(status).toContain("pass cold comment 2 replaces comment 1 at the same SHAs");
     const reread = await verify([
       corrected, modern("finish", A), modern("cold", B, { reread: true }), modern("cold", B),
     ]);
-    expect(reread.check).toBe("NOTICE record replacement pass cold comment 4 replaces comment 3 at the same SHAs\n");
+    expect(reread.check).toContain("a repeat after a later pass has recorded must be marked as a re-read");
+    expect(reread.status).toContain("issuecomment-3");
+    const outOfOrder = await verify([modern("finish", A), corrected, modern("finish", A)], A);
+    expect(outOfOrder.check).toMatch(/FAIL sequence pass finish/);
+    expect(outOfOrder.check).toContain("NOTICE record replacement pass finish comment 3 replaces comment 1");
   });
 
   it.each([

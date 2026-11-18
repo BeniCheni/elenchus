@@ -1,5 +1,4 @@
 import { posix } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import type { GhClient } from "./gh.js";
 import { recordTimeline, rereadBoundary, UnresolvedSha } from "./load.js";
 import { diffTrees, readTree } from "./manifest.js";
@@ -163,11 +162,12 @@ class HeadChanges {
     const [beforeVersion, afterVersion] = await Promise.all([
       this.json(previous.get(versionFile)), this.json(next.get(versionFile)),
     ]);
-    const newVersion = versionOf(afterVersion, pattern);
-    let oldVersion = versionOf(beforeVersion, pattern);
+    if (!beforeVersion || !afterVersion) return null;
+    const newVersion = versionOf(afterVersion.value, pattern);
+    let oldVersion = versionOf(beforeVersion.value, pattern);
     if (!newVersion || !oldVersion) return null;
     if (changesVersion && (oldVersion === newVersion || !sameFileMode(previous, next, versionFile) ||
-        !isDeepStrictEqual({ ...beforeVersion, version: newVersion }, afterVersion))) return null;
+        !sameVersionLines(beforeVersion.text, afterVersion.text, false))) return null;
     if (changesLock && (!sameFileMode(previous, next, lockFile) || !await this.versionOnlyLock(
       previous.get(lockFile), next.get(lockFile), oldVersion, newVersion, pattern,
     ))) return null;
@@ -175,7 +175,7 @@ class HeadChanges {
     if (oldVersion === newVersion) {
       const reviewTree = await this.tree(this.reviewed);
       if (reviewTree.truncated) return null;
-      oldVersion = versionOf(await this.json(pathIndex(reviewTree).get(versionFile)), pattern);
+      oldVersion = versionOf((await this.json(pathIndex(reviewTree).get(versionFile)))?.value, pattern);
     }
     if (!oldVersion || !newVersion || oldVersion === newVersion) return null;
     for (const path of outside) {
@@ -211,21 +211,37 @@ class HeadChanges {
       if (!sameEntry(original, left) && !sameEntry(original, right) && !sameEntry(left, right)) return false;
       if (!sameEntry(expected, result.get(path))) return false;
     }
-    return true;
+    // A comparison names one merge base. Any other merge base appears in
+    // both parents' ranges from that base.
+    const [left, right] = await Promise.all([
+      this.commitsSince(ancestor, first), this.commitsSince(ancestor, second),
+    ]);
+    if (!left || !right) return false;
+    const leftShas = new Set(left.map(({ sha }) => sha));
+    return !right.some(({ sha }) => leftShas.has(sha));
+  }
+
+  private async commitsSince(base: string, tip: string): Promise<GhCompareCommit[] | null> {
+    if (base === tip) return [];
+    const compare = await this.state.compare(base, tip, true).catch((error: unknown) => {
+      if (error instanceof UnresolvedSha) return null;
+      throw error;
+    });
+    const commits = compare?.commits;
+    return compare?.status === "ahead" && commits && compare.total_commits === commits.length ? commits : null;
   }
 
   private async versionOnlyLock(
     before: TreeEntry | undefined, after: TreeEntry | undefined, oldVersion: string, newVersion: string, pattern: RegExp,
   ): Promise<boolean> {
     const [from, to] = await Promise.all([this.json(before), this.json(after)]);
-    const packages = jsonObject(from?.packages);
-    const root = jsonObject(packages?.[""]);
-    const lockVersion = versionOf(from, pattern);
-    if (!root || !lockVersion || lockVersion === newVersion || root.version !== lockVersion ||
+    if (!from || !to) return false;
+    const lockVersion = versionOf(from.value, pattern);
+    if (!lockVersion || lockVersion === newVersion ||
         (oldVersion !== newVersion && lockVersion !== oldVersion)) return false;
-    return isDeepStrictEqual({
-      ...from, version: newVersion, packages: { ...packages, "": { ...root, version: newVersion } },
-    }, to);
+    if (lockRoot(from.value)?.version !== lockVersion || to.value.version !== newVersion ||
+        lockRoot(to.value)?.version !== newVersion) return false;
+    return sameVersionLines(from.text, to.text, true);
   }
 
   private tree(sha: string): Promise<GitTree> {
@@ -245,12 +261,13 @@ class HeadChanges {
     return compare?.status === "ahead" || compare?.status === "identical";
   }
 
-  private async json(entry: TreeEntry | undefined): Promise<Record<string, unknown> | null> {
+  private async json(entry: TreeEntry | undefined): Promise<{ text: string; value: Record<string, unknown> } | null> {
     if (!entry) return null;
     const text = await this.text(entry);
     if (text === null) return null;
     try {
-      return jsonObject(JSON.parse(text) as unknown);
+      const value = jsonObject(JSON.parse(text) as unknown);
+      return value ? { text, value } : null;
     } catch {
       return null;
     }
@@ -279,9 +296,58 @@ function jsonObject(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-function versionOf(value: Record<string, unknown> | null, pattern: RegExp): string | null {
+function lockRoot(value: Record<string, unknown>): Record<string, unknown> | null {
+  return jsonObject(jsonObject(value.packages)?.[""]);
+}
+
+function versionOf(value: Record<string, unknown> | undefined, pattern: RegExp): string | null {
   const version = value?.version;
   return typeof version === "string" && pattern.exec(version)?.[0] === version ? version : null;
+}
+
+function sameVersionLines(before: string, after: string, lock: boolean): boolean {
+  const oldLines = versionLines(before, lock);
+  const newLines = versionLines(after, lock);
+  return oldLines !== null && newLines !== null && oldLines.length === newLines.length &&
+    oldLines.every((line, index) => line === newLines[index]);
+}
+
+function versionLines(text: string, lock: boolean): string[] | null {
+  // The caller already parsed the document. Walk the original tokens so a
+  // dependency's version and the order or formatting of keys remain visible.
+  const frames: { path: string[] | null; key?: string }[] = [];
+  const spans: { start: number; end: number }[] = [];
+  let member = false;
+  for (const { 0: token, 1: string, 2: colon, index } of text.matchAll(/("(?:[^"\\]|\\.)*")(\s*:)?|[{}[\],]/g)) {
+    const frame = frames.at(-1);
+    if (token === "{" || token === "[") {
+      const path = !frame ? [] : frame.path && frame.key !== undefined ? [...frame.path, frame.key] : null;
+      frames.push({ path: token === "{" ? path : null });
+    } else if (token === "}" || token === "]") {
+      frames.pop();
+    } else if (frame?.path) {
+      if (token === ",") {
+        delete frame.key;
+      } else if (colon) {
+        frame.key = JSON.parse(string!) as string;
+      } else if (frame.key === "version" && (
+        frame.path.length === 0 || (lock && frame.path.length === 2 && frame.path[0] === "packages" && frame.path[1] === "")
+      )) {
+        // Require one root version and, for the lockfile, one package version.
+        if (frame.path.length === 0) {
+          if (member) return null;
+          member = true;
+        }
+        spans.push({ start: index, end: index + token.length });
+      }
+    }
+  }
+  if (!member || spans.length !== (lock ? 2 : 1)) return null;
+  let normalized = text;
+  for (const { start, end } of spans.reverse()) {
+    normalized = normalized.slice(0, start) + '""' + normalized.slice(end);
+  }
+  return normalized.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g) ?? [];
 }
 
 function sameFileMode(before: Map<string, TreeEntry>, after: Map<string, TreeEntry>, path: string): boolean {

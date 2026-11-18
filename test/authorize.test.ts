@@ -37,6 +37,7 @@ function world(options: {
   state?: string;
   repo?: string;
   changedPath?: string;
+  boundary?: string;
   configure?: (config: Config) => void;
 } = {}) {
   const configured = kickoffConfig();
@@ -44,17 +45,17 @@ function world(options: {
   configured.passes = allPasses.map((id) => ({
     id, role: id, seat: id, ...(options.covered ? { coverage: true } : {}),
   }));
-  if (options.allPasses?.includes("ruling")) {
+  if (allPasses.includes("synthesis")) {
     configured.finding_flow = { opens: "cold", carries: ["reply", "synthesis"], ruling: "ruling" };
   } else configured.finding_flow = { opens: allPasses[0]!, carries: [], ruling: allPasses.at(-1)! };
   const gate = configured.gate!;
-  if (options.changedPath) gate.allowed_changes!.reread_pass = "cold";
-  else delete gate.allowed_changes;
+  gate.allowed_changes!.reread_pass = options.boundary ?? allPasses[0]!;
   gate.app_id = options.configAppId ?? appId;
   if (options.blockRoute) gate.blocking_unverified.push("route");
   options.configure?.(configured);
   const head = options.head ?? sha;
-  const pull = { number: 1, state: options.state ?? "open", head: { sha: head }, base: { ref: "trunk", sha: head } };
+  const baseSha = options.changedPath ? sha : head;
+  const pull = { number: 1, state: options.state ?? "open", head: { sha: head }, base: { ref: "trunk", sha: baseSha } };
   const comments = (options.records ?? allPasses.map((pass) => record(pass))).map((entry, i) =>
     comment(i + 1, fenced(entry), `2026-11-14T00:00:0${i}Z`),
   );
@@ -64,9 +65,9 @@ function world(options: {
       calls.push(path);
       const root = `/repos/${options.repo ?? repo}`;
       if (path === `${root}/pulls/1`) return pull;
-      if (path === `${root}/commits/heads%2Ftrunk`) return { sha: head };
+      if (path === `${root}/commits/heads%2Ftrunk`) return { sha: baseSha };
       if (path === `${root}/issues/1/comments?per_page=100` && readOptions?.paginate) return comments;
-      if (path === `${root}/contents/.elenchus.json?ref=${head}`) {
+      if (path === `${root}/contents/.elenchus.json?ref=${baseSha}`) {
         return { content: Buffer.from(JSON.stringify(configured)).toString("base64") };
       }
       if (path === `${root}/commits/${head}/check-runs?filter=latest&per_page=100` && readOptions?.paginate) {
@@ -77,7 +78,11 @@ function world(options: {
         }] };
       }
       if (options.changedPath && path.startsWith(`${root}/compare/${sha}...${head}`)) {
-        return { status: "ahead", total_commits: 1, commits: [{ sha: head, parents: [{ sha }] }] };
+        return {
+          status: "ahead", total_commits: 1, commits: [{ sha: head, parents: [{ sha }], commit: {
+            author: { name: "Claude", email: "noreply@anthropic.com" },
+          } }],
+        };
       }
       if (options.changedPath && path.startsWith(`${root}/git/trees/`)) {
         return {
@@ -272,19 +277,87 @@ it("authorizes an allowed docs commit without counting its classification notice
     })]) });
 });
 
-it("refuses a matching abbreviated legacy output SHA without touching the App client", async () => {
+it("refuses a matching abbreviated legacy boundary output SHA without touching the App client", async () => {
   const head = `abc1234${"0".repeat(33)}`;
   const short = head.slice(0, 7);
   const allPasses = ["1", "3"];
-  const records = allPasses.map((pass) => {
-    const legacy = record(pass, { input_sha: short, output_sha: short });
-    delete legacy.schema_version;
-    return legacy;
-  });
+  const records = [record("1", { input_sha: short, output_sha: short }), record("3", { input_sha: head, output_sha: head })];
+  delete records[0]!.schema_version;
   const result = await authorize(world({ head, allPasses, records }).gh, repo, 1, { dryRun: true });
   expect(result).toMatchObject({ ok: false, items: [expect.objectContaining({
     rule: "head", message: expect.stringContaining("output_sha abc1234 must be a full 40-digit SHA"),
   })] });
+});
+
+const fullPasses = ["brief", "cold", "plan", "reply", "synthesis", "ruling", "exec"];
+
+it("requires allowed_changes before classifying a seven-pass writing executor", async () => {
+  const head = "b".repeat(40);
+  const records = fullPasses.map((pass) => record(pass, pass === "exec" ? { output_sha: head, commits: [head] } : {}));
+  const options = { head, allPasses: fullPasses, records, boundary: "synthesis" };
+  const bad = world({
+    ...options, changedPath: "src/other.ts", configure: (config) => { delete config.gate!.allowed_changes; },
+  });
+  expect(await authorize(bad.gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: [{ rule: "config", message: "config.gate.allowed_changes is required" }],
+  });
+  expect(await authorize(world({ ...options, changedPath: "docs/notes.md" }).gh, repo, 1, { dryRun: true }))
+    .toMatchObject({ ok: true, head, items: [expect.objectContaining({ rule: "head", message: expect.stringContaining("only configured paths") })] });
+});
+
+it.each(["configured last", "chronologically latest"])("reports a short output outside the boundary on the %s pass", async (caseName) => {
+  const short = sha.slice(0, 7);
+  const legacy = record(caseName === "configured last" ? "exec" : "3", { input_sha: short, output_sha: short });
+  delete legacy.schema_version;
+  const allPasses = ["cold", "3", "exec"];
+  const head = caseName === "configured last" ? "b".repeat(40) : sha;
+  const records = caseName === "configured last"
+    ? [record("cold"), record("3"), legacy, record("3", { reread: true, input_sha: head, output_sha: head })]
+    : [record("cold"), record("exec"), legacy];
+  const result = await authorize(world({ allPasses, records, head, changedPath: "docs/notes.md" }).gh, repo, 1, { dryRun: true });
+  expect(result).toMatchObject({ ok: false, items: expect.arrayContaining([
+    expect.objectContaining({ rule: "head", message: `output_sha ${short} must be a full 40-digit SHA for authorize` }),
+  ]) });
+});
+
+it.each([
+  ["blocking", "contested", "blocking", "open", false],
+  ["blocking", "contested", "blocking", "fixed", true],
+  ["blocking", "contested", "blocking", "killed", true],
+  ["blocking", "contested", "note", "open", false],
+  ["note", "contested", "note", "open", true],
+  ["blocking", "open", null, null, false],
+  ["blocking", "open", "blocking", "killed", true],
+  ["blocking", "fixed", null, null, true],
+  ["should-fix", "open", "blocking", "open", false],
+] as const)("adjudicates a %s %s finding when the ruling has %s %s", async (severity, status, ruledSeverity, ruledStatus, ok) => {
+  const allPasses = ["cold", "reply", "synthesis", "ruling"];
+  const finding = { id: "F1", severity, status };
+  const records = [
+    ...allPasses.slice(0, -1).map((pass) => record(pass, { findings: [finding] })),
+    record("ruling", { findings: ruledSeverity && ruledStatus ? [{ id: finding.id, severity: ruledSeverity, status: ruledStatus }] : [] }),
+  ];
+  const result = await authorize(world({ allPasses, records }).gh, repo, 1, { dryRun: true });
+  expect(result.ok).toBe(ok);
+  expect(result.items).toEqual(ok ? [] : [expect.objectContaining({ rule: "ruling", finding: "F1" })]);
+});
+
+it("rejects synthesis and opener replacements posted after the executor", async () => {
+  const contested = { id: "F1", severity: "blocking", status: "contested" as const };
+  const note = { id: "F2", severity: "note", status: "open" as const };
+  const records = fullPasses.map((pass) => record(pass, {
+    findings: ["cold", "reply", "synthesis"].includes(pass) ? [contested, note] : [],
+  }));
+  const replacement = record("synthesis", { findings: [{ ...contested, status: "fixed" }, note] });
+  for (const entries of [[replacement], [record("cold", { findings: [note] }), record("synthesis", { findings: [note] })]]) {
+    const result = await authorize(world({ allPasses: fullPasses, records: [...records, ...entries], boundary: "synthesis" }).gh,
+      repo, 1, { dryRun: true });
+    expect(result).toMatchObject({ ok: false, items: expect.arrayContaining([
+      expect.objectContaining({ rule: "ruling", finding: "F1" }),
+    ]) });
+    expect(result.items.filter(({ message }) => message.includes("later pass has recorded"))).toHaveLength(entries.length);
+    expect(result.items.some(({ rule }) => rule === "record replacement")).toBe(false);
+  }
 });
 
 it.each([

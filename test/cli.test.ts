@@ -104,28 +104,30 @@ function checkedComments(comments: unknown[]) {
   });
 }
 
-function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCoverage?: boolean } = {}) {
+function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCoverage?: boolean; correction?: boolean; changed?: boolean } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "elenchus-cli-authorize-"));
   const fixtures = path.join(dir, "fixtures");
   mkdirSync(fixtures);
   const sha = "1".repeat(40);
+  const head = options.changed ? "2".repeat(40) : sha;
   const write = (apiPath: string, value: unknown) => {
     writeFileSync(path.join(fixtures, `${encodeURIComponent(apiPath)}.json`), JSON.stringify(value));
   };
   const baseConfig = kickoffConfig();
   baseConfig.passes = [
-    { id: "0", role: "review", seat: "reviewer", coverage: options.omitCoverage === true },
+    { id: "0", role: "review", seat: "reviewer", coverage: options.omitCoverage === true || options.correction === true },
     { id: "ruling", role: "ruling", seat: "maintainer" },
   ];
   baseConfig.finding_flow = { opens: "0", carries: [], ruling: "ruling" };
-  delete baseConfig.gate!.allowed_changes;
+  baseConfig.gate!.allowed_changes!.reread_pass = "0";
   baseConfig.gate!.app_id = 459;
-  write("/repos/BeniCheni/elenchus/pulls/1", { number: 1, state: "open", head: { sha }, base: { sha, ref: "trunk" } });
+  write("/repos/BeniCheni/elenchus/pulls/1", { number: 1, state: "open", head: { sha: head }, base: { sha, ref: "trunk" } });
   write("/repos/BeniCheni/elenchus/commits/heads%2Ftrunk", { sha });
   write(`/repos/BeniCheni/elenchus/contents/.elenchus.json?ref=${sha}`, {
     content: Buffer.from(JSON.stringify(baseConfig)).toString("base64"),
   });
-  write("/repos/BeniCheni/elenchus/issues/1/comments?per_page=100", options.incomplete ? [] : ["0", "ruling"].map((pass, i) => ({
+  const passes = options.correction ? ["0", "0", "ruling"] : ["0", "ruling"];
+  write("/repos/BeniCheni/elenchus/issues/1/comments?per_page=100", options.incomplete ? [] : passes.map((pass, i) => ({
     id: i + 1, html_url: `https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${i + 1}`,
     user: { login: "BeniCheni" }, created_at: `2026-11-14T00:00:0${i + 1}Z`,
     body: fenced({
@@ -134,11 +136,22 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
       effort: { requested: "xhigh", observed: null, source: "not reported" },
       route: { recommended_by: null, confirmed_by: null },
       input_sha: sha, output_sha: sha, commits: [], findings: [], verdict: "ok",
+      ...(options.correction && pass === "0" ? { coverage: { total: 1 - i, reviewed: 1 - i, skipped: [] } } : {}),
     }),
   })));
-  write(`/repos/BeniCheni/elenchus/commits/${sha}/check-runs?filter=latest&per_page=100`, {
-    check_runs: [{ name: "verify", app: { id: 15368 }, head_sha: sha, status: "completed", conclusion: options.red ? "failure" : "success" }],
+  write(`/repos/BeniCheni/elenchus/commits/${head}/check-runs?filter=latest&per_page=100`, {
+    check_runs: [{ name: "verify", app: { id: 15368 }, head_sha: head, status: "completed", conclusion: options.red ? "failure" : "success" }],
   });
+  if (options.correction) write(`/repos/BeniCheni/elenchus/compare/${sha}...${sha}`, { status: "identical", total_commits: 0, files: [] });
+  if (options.changed) {
+    write(`/repos/BeniCheni/elenchus/compare/${sha}...${head}`, {
+      status: "ahead", total_commits: 1, commits: [{ sha: head, parents: [{ sha }] }],
+    });
+    write(`/repos/BeniCheni/elenchus/git/trees/${sha}?recursive=1`, { tree: [], truncated: false });
+    write(`/repos/BeniCheni/elenchus/git/trees/${head}?recursive=1`, {
+      tree: [{ path: "docs/release.md", type: "blob", mode: "100644", sha: "3".repeat(40) }], truncated: false,
+    });
+  }
   const bin = fakeGh(dir);
   return run(["authorize", "BeniCheni/elenchus#1", "--dry-run"], {
     PATH: `${bin}:${process.env.PATH ?? ""}`, FIXTURE_DIR: fixtures,
@@ -160,4 +173,16 @@ it("runs authorize dry-run through dist/cli.js in the repository", () => {
     expect(rejected.stdout.startsWith(base)).toBe(true);
     expect(rejected.stdout).toMatch(expected);
   }
+});
+
+it("prints both replacement IDs and the accepted shape on authorize success, and the IDs on refusal", () => {
+  const notice = "NOTICE record replacement pass 0 comment 2 replaces comment 1 at the same SHAs";
+  const accepted = authorizeCli({ correction: true, changed: true });
+  expect(accepted.status, accepted.stderr + accepted.stdout).toBe(0);
+  expect(accepted.stdout).toContain(notice);
+  expect(accepted.stdout).toContain(`NOTICE head ${"2".repeat(40)} allowed shape: only configured paths`);
+  const refused = authorizeCli({ correction: true, red: true });
+  expect(refused.status, refused.stderr + refused.stdout).toBe(1);
+  expect(refused.stdout).toContain(notice);
+  expect(refused.stdout).toMatch(/FAIL ci verify .*failure/);
 });

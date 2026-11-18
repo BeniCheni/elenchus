@@ -42,6 +42,12 @@ describe("repository policy configuration", () => {
     expect(() => parseConfig({ ...config, ...change })).toThrow(/config\./);
   });
 
+  it("rejects a malformed version pattern when loading configuration", () => {
+    const config = kickoffConfig();
+    config.gate!.allowed_changes!.version_only!.pattern = "[";
+    expect(() => parseConfig(config)).toThrow("config.gate.allowed_changes.version_only.pattern must be a regular expression");
+  });
+
   it("reports unknown keys at each config level and leaves status and check usable", async () => {
     const raw = kickoffConfig();
     const fields = {

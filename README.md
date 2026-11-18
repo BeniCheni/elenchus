@@ -125,10 +125,14 @@ that admitted each qualifying commit after the review.
 
 `authorize` also requires all configured passes to have valid records, enforces configured
 UNVERIFIED blockers, requires full output SHAs for the head decision, and checks CI even at
-the reviewed head. For every contested finding in the last carrying pass's standing record,
-the ruling pass must repeat its ID with a status other than `contested`. The ruling must be
-posted after that standing record, including a synthesis re-read. Seats follow the roster's
-vendor separation as a human review rule.
+the reviewed head. For each finding, it uses the severity and status from a ruling posted
+after the standing synthesis, including a synthesis re-read, when the ruling names that ID.
+Otherwise it uses the standing synthesis. Every blocking finding must be `fixed` or `killed`.
+The ruling must repeat every contested ID from the synthesis. A contested blocking finding
+needs a ruling of `fixed` or `killed`. Other contested findings need a status other than
+`contested`. A same-SHA replacement of a record under schema 1.2 must precede any standing
+record from a later configured pass. `authorize` reports accepted replacements with both
+comment IDs. Seats follow the roster's vendor separation as a human review rule.
 
 A merged pull request is named in one line. Its base is the merge commit's first parent when
 available, and range rules are skipped. A comparison with 300 or more files uses the merge
@@ -194,7 +198,8 @@ Optional `finding_flow` names `opens`, ordered `carries`, and the later `ruling`
 `blocking_unverified` rules, and `allowed_changes`. The allowed set names `paths`,
 `reread_pass` and optional `version_only` settings for the version `file`, test globs and
 `pattern`. The default version pattern accepts `MAJOR.MINOR.PATCH` with an optional
-prerelease. `authorize` requires `finding_flow.ruling` and at least one required check.
+prerelease. `authorize` requires `gate.allowed_changes`, `finding_flow.ruling` and at least
+one required check.
 Unknown configuration keys produce notices in `status` and `check` and refusals in `authorize`.
 The adoption example blocks unverified coverage.
 
@@ -202,12 +207,14 @@ The reviewed boundary is the standing record of `reread_pass`. Commits after it,
 executor commits, need green CI at the new head and one of these shapes.
 
 - Configured paths and version-only changes. The version file and its install directory's
-  lockfile always get a parsed JSON comparison, even when a path glob covers them. Only the
-  version file's `version` and the lockfile's `version` and `packages[""].version` may change
-  from the old valid version to the new valid version.
+  lockfile must parse as JSON before and after, even when a path glob covers them. Each file
+  keeps its original lines and line endings. Only the version strings on the version file's
+  top-level `version` line and the lockfile's top-level `version` and `packages[""].version`
+  lines can change. A lockfile with `lockfileVersion: 1` has only the top-level version for
+  npm to update, so that project's bump needs a reviewed commit.
 - Test changes by exact substitution of the old valid version string with the new valid string.
-- A two-parent merge whose incoming parent is on the base branch. For each path, compare
-  the two parents to their merge base. If only one side changes an entry, the result must
+- A two-parent merge whose incoming parent is on the base branch and whose parents have
+  one merge base. For each path, compare the two parents to that merge base. If only one side changes an entry, the result must
   carry that side's object and mode, including deletions. If both sides agree, the result
   must carry their shared entry. If both sides change it differently, a re-read is required.
 

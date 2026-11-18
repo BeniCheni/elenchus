@@ -15,6 +15,8 @@ const HEAD = "b".repeat(40);
 const BASE = "c".repeat(40);
 const OFFBASE = "d".repeat(40);
 const ANCESTOR = "e".repeat(40);
+const BUMP = "f".repeat(40);
+const ROOT = "0".repeat(40);
 const sha = (text: string) => createHash("sha1").update(text).digest("hex");
 const record: SeatRecord = {
   seat_record: 1, schema_version: "1.2", pr: 1, pass: "finish", runtime: "Claude Code",
@@ -24,7 +26,7 @@ const record: SeatRecord = {
   input_sha: REVIEWED, output_sha: REVIEWED, commits: [], findings: [], verdict: "ok",
 };
 
-type Snapshot = Record<string, string | { text: string; mode: string; id?: string }>;
+type Snapshot = Record<string, string | { text: string; mode: string; id?: string; type?: "blob" | "commit" }>;
 
 async function headCheck(options: {
   before?: Snapshot;
@@ -42,6 +44,10 @@ async function headCheck(options: {
   pattern?: string;
   versionFile?: string;
   lockFile?: string;
+  listVersionFiles?: boolean;
+  bump?: Snapshot;
+  mergeBases?: [string, string];
+  truncatedCompare?: "left" | "right";
 }) {
   const config = kickoffConfig();
   config.passes = [{ id: "finish", role: "finish", seat: "reviewer" }];
@@ -54,19 +60,24 @@ async function headCheck(options: {
     config.installs = [{ dir: "web", lockfile: options.lockFile }];
   }
   // The replay still lists these paths. They must not inherit the path exemption.
-  config.gate!.allowed_changes!.paths.push(version.file, options.lockFile ? `web/${options.lockFile}` : "package-lock.json");
+  const lockFile = options.lockFile ? `web/${options.lockFile}` : "package-lock.json";
+  const allowed = config.gate!.allowed_changes!;
+  allowed.paths = allowed.paths.filter((path) => path !== version.file && path !== lockFile);
+  if (options.listVersionFiles !== false) allowed.paths.push(version.file, lockFile);
   if (options.allow === false) delete config.gate!.allowed_changes;
   const records = [comment(1, fenced(record), "2026-11-14T00:00:01Z")];
   if (options.reread) records.push(comment(2, fenced({
     ...record, reread: true, input_sha: HEAD, output_sha: HEAD,
   }), "2026-11-14T00:00:02Z"));
   const nodes = {
-    [ANCESTOR]: { parents: [], author: "Codex <noreply@openai.com>" },
-    [REVIEWED]: { parents: [ANCESTOR], author: "Codex <noreply@openai.com>" },
-    [OFFBASE]: { parents: [ANCESTOR], author: "Codex <noreply@openai.com>" },
-    [BASE]: { parents: [ANCESTOR], author: "Codex <noreply@openai.com>" },
+    [ANCESTOR]: { parents: options.mergeBases ? [ROOT] : [], author: "Codex <noreply@openai.com>" },
+    [REVIEWED]: { parents: options.mergeBases ?? [ANCESTOR], author: "Codex <noreply@openai.com>" },
+    [OFFBASE]: { parents: [options.mergeBases ? ROOT : ANCESTOR], author: "Codex <noreply@openai.com>" },
+    [BASE]: { parents: options.mergeBases ? [...options.mergeBases].reverse() : [ANCESTOR], author: "Codex <noreply@openai.com>" },
+    ...(options.bump ? { [BUMP]: { parents: [REVIEWED], author: "Codex <noreply@openai.com>" } } : {}),
+    ...(options.mergeBases ? { [ROOT]: { parents: [], author: "Codex <noreply@openai.com>" } } : {}),
     [HEAD]: {
-      parents: [options.firstParent ?? REVIEWED, ...(options.secondParent ? [options.secondParent] : []), ...(options.thirdParent ? [options.thirdParent] : [])],
+      parents: [options.firstParent ?? (options.bump ? BUMP : REVIEWED), ...(options.secondParent ? [options.secondParent] : []), ...(options.thirdParent ? [options.thirdParent] : [])],
       author: "Codex <noreply@openai.com>",
     },
   };
@@ -77,10 +88,12 @@ async function headCheck(options: {
     [HEAD]: options.after ?? {},
     [BASE]: options.base ?? {},
     [ANCESTOR]: options.ancestor ?? {},
+    ...(options.mergeBases ? { [OFFBASE]: options.ancestor ?? {} } : {}),
+    ...(options.bump ? { [BUMP]: options.bump } : {}),
   }).map(([ref, snapshot]) => [ref, Object.entries(snapshot).map(([path, value]) => {
-    const { text, mode, id = sha(text) } = typeof value === "string" ? { text: value, mode: "100644" } : value;
+    const { text, mode, id = sha(text), type = "blob" } = typeof value === "string" ? { text: value, mode: "100644" } : value;
     blobs.set(id, text);
-    return { path, type: "blob", mode, sha: id };
+    return { path, type, mode, sha: id };
   })]));
   const gh: GhClient = {
     async get(apiPath, request) {
@@ -94,6 +107,13 @@ async function headCheck(options: {
       const blob = /\/git\/blobs\/([^?]+)/.exec(apiPath)?.[1];
       if (blob) return { encoding: "base64", content: Buffer.from(blobs.get(blob)!).toString("base64") };
       const value = await inner.get(apiPath, request);
+      if (options.mergeBases && apiPath.endsWith(`/compare/${REVIEWED}...${BASE}`)) {
+        return { ...(value as GhCompare), merge_base_commit: { sha: options.mergeBases[0] } };
+      }
+      if (options.truncatedCompare === "left" && apiPath.includes(`/compare/${ANCESTOR}...${REVIEWED}`) ||
+          options.truncatedCompare === "right" && apiPath.includes(`/compare/${ANCESTOR}...${BASE}`)) {
+        return { ...(value as GhCompare), total_commits: 2 };
+      }
       if (options.compare && apiPath.includes("/compare/") && request?.paginate) {
         return { ...(value as GhCompare), ...options.compare };
       }
@@ -156,12 +176,26 @@ it("accepts a clean base merge and refuses a dropped reviewed file, an ours merg
     { secondParent: OFFBASE },
     { truncated: BASE },
     { truncated: ANCESTOR },
+    { truncatedCompare: "left" as const },
+    { truncatedCompare: "right" as const },
   ]) {
     expect(await headCheck({ ...correct, ...options })).toContainEqual({
       severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read"),
     });
   }
 });
+
+it.each([[ANCESTOR, OFFBASE], [OFFBASE, ANCESTOR]] as [string, string][])(
+  "refuses a criss-cross merge whichever base compare names (%s)",
+  async (first, second) => {
+    // Both bases are ancestors of both parents and neither base is an
+    // ancestor of the other in this compare fixture.
+    const before = { "src/p.ts": "reviewed" };
+    const base = { "src/p.ts": "incoming" };
+    expect(await headCheck({ before, base, ancestor: before, after: base, secondParent: BASE, mergeBases: [first, second] }))
+      .toEqual([expect.objectContaining({ severity: "fail", message: expect.stringContaining("needs a pass finish re-read") })]);
+  },
+);
 
 it("refuses to replace a reviewed change with a different change to the same path on the base", async () => {
   const ancestor = { "src/guard.ts": "original" };
@@ -175,6 +209,35 @@ it("refuses to replace a reviewed change with a different change to the same pat
   const agreed = { "src/guard.ts": "same change" };
   expect(await headCheck({ ancestor, before: agreed, base: agreed, after: agreed, secondParent: BASE }))
     .toEqual([expect.objectContaining({ severity: "notice", message: expect.stringContaining("merge of the base branch") })]);
+});
+
+const file = { "docs/a.md": "a" };
+const renamed = { "docs/b.md": "a" };
+const edited = { "docs/a.md": "edited" };
+const symlink = { "docs/a.md": { mode: "120000", text: "docs/b.md" } };
+const executable = { "docs/a.md": { mode: "100755", text: "a" } };
+const submodule = { sub: { mode: "160000", text: "submodule commit", type: "commit" as const } };
+
+it.each<[string, Snapshot, Snapshot, Snapshot, Snapshot, boolean]>([
+  ["an incoming rename of an untouched file", file, file, renamed, renamed, true],
+  ["an incoming rename of an edited file", file, edited, renamed, { "docs/b.md": "edited" }, false],
+  ["an incoming executable bit", file, file, executable, executable, true],
+  ["a dropped incoming executable bit", file, file, executable, file, false],
+  ["an incoming symlink", file, file, symlink, symlink, true],
+  ["a different symlink target", file, file, symlink, { "docs/a.md": { mode: "120000", text: "elsewhere" } }, false],
+  ["an incoming submodule", {}, {}, submodule, submodule, true],
+  ["a repointed submodule", {}, {}, submodule, { sub: { ...submodule.sub, text: "another commit" } }, false],
+  ["an identical addition on both parents", {}, file, file, file, true],
+  ["a conflicting addition on both parents", {}, file, edited, edited, false],
+  ["an incoming deletion of an edited file", file, edited, {}, {}, false],
+  ["an incoming edit of a deleted file", file, {}, edited, edited, false],
+  ["an incoming file-to-directory change", file, file, { "docs/a.md/page": "a" }, { "docs/a.md/page": "a" }, true],
+])("classifies a base merge with %s", async (_description, ancestor, before, base, after, admitted) => {
+  const result = await headCheck({ ancestor, before, base, after, secondParent: BASE });
+  expect(result).toEqual([expect.objectContaining({
+    rule: "head", severity: admitted ? "notice" : "fail",
+    message: expect.stringContaining(admitted ? "merge of the base branch" : "needs a pass finish re-read"),
+  })]);
 });
 
 it("refuses an octopus merge and a review reachable only through a later parent", async () => {
@@ -196,58 +259,99 @@ it("does not accept a version replacement if the old version is absent from the 
   })).toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
 });
 
-it("accepts the JSON changes from npm version patch and refuses unrelated dependency and script changes", async () => {
+const json = (value: object) => JSON.stringify(value, null, 2) + "\n";
+
+it.each([1, 2, 3])("classifies real npm version output for lockfileVersion %s", async (lockfileVersion) => {
   const dir = mkdtempSync(join(tmpdir(), "elenchus-version-"));
   const packageFile = "package.json";
   const lockFile = "package-lock.json";
+  const entry = { name: "example", version: "1.2.3", dependencies: { example: "1.2.3" } };
   const before = {
-    [packageFile]: JSON.stringify({ name: "example", version: "1.2.3", scripts: { test: "node --test" }, dependencies: { example: "1.2.3" } }),
-    [lockFile]: JSON.stringify({ name: "example", version: "1.2.3", lockfileVersion: 3, packages: {
-      "": { name: "example", version: "1.2.3", dependencies: { example: "1.2.3" } },
-      "node_modules/example": { version: "1.2.3" },
-    } }),
+    [packageFile]: json({
+      ...entry, scripts: { test: "node --test" },
+      exports: { ".": { node: "./src/node.js", default: "./src/default.js" } },
+    }),
+    [lockFile]: json({
+      name: entry.name, version: entry.version, lockfileVersion,
+      ...(lockfileVersion === 1
+        ? { dependencies: { example: { version: "1.2.3" } } }
+        : { packages: { "": entry, "node_modules/example": { version: "1.2.3" } } }),
+    }),
   };
   try {
     for (const [file, content] of Object.entries(before)) writeFileSync(join(dir, file), content);
     execFileSync("npm", ["version", "patch", "--no-git-tag-version", "--ignore-scripts"], { cwd: dir });
     const after = { [packageFile]: readFileSync(join(dir, packageFile), "utf8"), [lockFile]: readFileSync(join(dir, lockFile), "utf8") };
-    expect(await headCheck({ before, after })).toEqual([
-      expect.objectContaining({ severity: "notice", message: expect.stringContaining("version files only") }),
-    ]);
+    const allowed = expect.objectContaining({ severity: "notice", message: expect.stringContaining("version files only") });
+    const refused = expect.objectContaining({ severity: "fail", rule: "head" });
+    expect(await headCheck({ before, after, listVersionFiles: false })).toEqual([lockfileVersion === 1 ? refused : allowed]);
+    if (lockfileVersion !== 3) return;
+
+    const parsedPackage = JSON.parse(after[packageFile]);
     const parsedLock = JSON.parse(after[lockFile]);
     for (const [field, changed] of Object.entries({
       dependency: { ...after, [lockFile]: after[lockFile].replaceAll('"1.2.3"', '"1.2.4"') },
-      lockVersion: { ...after, [lockFile]: JSON.stringify({ ...parsedLock, version: "1.2.3" }) },
-      rootLockVersion: { ...after, [lockFile]: JSON.stringify({ ...parsedLock, packages: {
+      lockVersion: { ...after, [lockFile]: json({ ...parsedLock, version: "1.2.3" }) },
+      rootLockVersion: { ...after, [lockFile]: json({ ...parsedLock, packages: {
         ...parsedLock.packages, "": { ...parsedLock.packages[""], version: "1.2.3" },
       } }) },
+      exportsOrder: { ...after, [packageFile]: json({ ...parsedPackage, exports: { ".": {
+        default: "./src/default.js", node: "./src/node.js",
+      } } }) },
+      whitespace: { ...after, [packageFile]: JSON.stringify(parsedPackage, null, 3) + "\n" },
+      extraLine: { ...after, [packageFile]: after[packageFile] + "\n" },
+      lineEndings: { ...after, [lockFile]: after[lockFile].replaceAll("\n", "\r\n") },
+      invalidPackage: { ...after, [packageFile]: after[packageFile].trimEnd().slice(0, -1) },
+      invalidLock: { ...after, [lockFile]: after[lockFile].trimEnd().slice(0, -1) },
       scriptWithoutBump: { ...before, [packageFile]: before[packageFile].replace("node --test", "node --test other.test.js") },
       scriptWithBump: { ...after, [packageFile]: after[packageFile].replace("node --test", "node --test other.test.js") },
       versionFileMode: { ...after, [packageFile]: { text: after[packageFile], mode: "100755" } },
       lockFileMode: { ...after, [lockFile]: { text: after[lockFile], mode: "100755" } },
     })) {
-      expect(await headCheck({ before, after: changed }), field).toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
+      expect(await headCheck({ before, after: changed }), field).toEqual([refused]);
     }
+
     const nested = (files: typeof before) => ({ "web/release.json": files[packageFile], "web/npm-lock.json": files[lockFile] });
     expect(await headCheck({ versionFile: "web/release.json", lockFile: "npm-lock.json", before: nested(before), after: nested(after) }))
-      .toEqual([expect.objectContaining({ severity: "notice", message: expect.stringContaining("version files only") })]);
-    expect(await headCheck({
-      versionFile: "web/release.json", lockFile: "npm-lock.json", before: nested(before),
-      after: nested({ ...after, [lockFile]: after[lockFile].replaceAll('"1.2.3"', '"1.2.4"') }),
-    })).toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
+      .toEqual([allowed]);
     const oldParsedLock = JSON.parse(before[lockFile]);
     for (const oldLock of [
       { ...oldParsedLock, version: "1.2.2", packages: { ...oldParsedLock.packages, "": { ...oldParsedLock.packages[""], version: "1.2.2" } } },
       { ...oldParsedLock, packages: { ...oldParsedLock.packages, "": { ...oldParsedLock.packages[""], version: "1.2.2" } } },
     ]) {
-      expect(await headCheck({ before: { ...before, [lockFile]: JSON.stringify(oldLock) }, after }))
-        .toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
+      expect(await headCheck({ before: { ...before, [lockFile]: json(oldLock) }, after })).toEqual([refused]);
     }
-    expect(await headCheck({ before: after, after: { ...after, [lockFile]: JSON.stringify(parsedLock, null, 3) } }))
-      .toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
+    expect(await headCheck({ before: after, after: { ...after, [lockFile]: JSON.stringify(parsedLock, null, 3) } })).toEqual([refused]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("requires the decoded version to change even if only its string token was edited", async () => {
+  const before = { "package.json": '{"version":"1.0.0"}' };
+  const after = { "package.json": '{"version":"1.0.\\u0030"}' };
+  expect(await headCheck({ before, after })).toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
+});
+
+it("refuses to sync a lockfile whose old version fails the configured version pattern", async () => {
+  const lock = (version: string) => json({ version, lockfileVersion: 3, packages: { "": { version } } });
+  const after = { "package.json": json({ version: "1.0.1" }), "package-lock.json": lock("1.0.1") };
+  expect(await headCheck({ before: { ...after, "package-lock.json": lock("nonsense") }, after })).toEqual([
+    expect.objectContaining({ severity: "fail", rule: "head" }),
+  ]);
+  expect(await headCheck({ before: { ...after, "package-lock.json": lock("1.0.0") }, after })).toEqual([
+    expect.objectContaining({ severity: "notice", message: expect.stringContaining("version files only") }),
+  ]);
+});
+
+it("uses the reviewed version when the exact test replacement follows a separate bump commit", async () => {
+  const before = { "package.json": json({ version: "1.0.0" }), "test/version.test.ts": 'assert("1.0.0");\n' };
+  const bump = { ...before, "package.json": json({ version: "1.0.1" }) };
+  const after = { ...bump, "test/version.test.ts": 'assert("1.0.1");\n' };
+  expect(await headCheck({ before, bump, after })).toEqual(expect.arrayContaining([
+    expect.objectContaining({ severity: "notice", message: expect.stringContaining("version files only") }),
+    expect.objectContaining({ severity: "notice", message: expect.stringContaining("test version replacement") }),
+  ]));
 });
 
 it("validates old and new version strings for both version-file and test replacements", async () => {
