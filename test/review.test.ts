@@ -507,6 +507,8 @@ describe("v1.2 passes and re-reads", () => {
     { records: [modern("cold", B, { reread: true })], error: /requires an earlier record/ },
     { records: [modern("cold", A), modern("cold", A, { reread: true })], error: /requires a later output_sha/ },
     { records: [modern("cold", A), modern("cold", B)], error: /must be marked as a re-read/ },
+    { records: [modern("cold", A), modern("cold", A, { output_sha: B })], error: /must be marked as a re-read/ },
+    { records: [modern("cold", B), modern("cold", B, { input_sha: A })], error: /must be marked as a re-read/ },
     { records: [modern("cold", B), modern("cold", A, { reread: true })], error: /does not advance from/ },
     { records: [modern("cold", A), modern("finish", C), modern("cold", B, { reread: true })], error: /does not continue from/ },
   ])("fails invalid re-read chains %#", async ({ records, error }) => {

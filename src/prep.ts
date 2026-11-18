@@ -483,7 +483,7 @@ export async function defaultRun(
     return runCommand(command, args, { ...(cwd ? { cwd } : {}), env: prepGitEnv() });
   }
   if (command !== "npm" || args.length !== 1 || args[0] !== "ci") {
-    throw new Error(`command refused: ${command} ${args.join(" ")}`.trimEnd());
+    throw new Error(`command refused: ${command}`);
   }
   return runCommand(command, args, cwd ? { cwd } : {});
 }

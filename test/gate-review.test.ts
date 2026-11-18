@@ -167,7 +167,7 @@ it("refuses to replace a reviewed change with a different change to the same pat
   const ancestor = { "src/guard.ts": "original" };
   const before = { "src/guard.ts": "reviewed", "test/guard.test.ts": "reviewed test" };
   const base = { "src/guard.ts": "incoming" };
-  for (const after of [base, { ...before, ...base }]) {
+  for (const after of [base, { ...before, ...base }, before]) {
     expect(await headCheck({ ancestor, before, base, after, secondParent: BASE })).toContainEqual({
       severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read"),
     });
@@ -231,6 +231,20 @@ it("accepts the JSON changes from npm version patch and refuses unrelated depend
     const nested = (files: typeof before) => ({ "web/release.json": files[packageFile], "web/npm-lock.json": files[lockFile] });
     expect(await headCheck({ versionFile: "web/release.json", lockFile: "npm-lock.json", before: nested(before), after: nested(after) }))
       .toEqual([expect.objectContaining({ severity: "notice", message: expect.stringContaining("version files only") })]);
+    expect(await headCheck({
+      versionFile: "web/release.json", lockFile: "npm-lock.json", before: nested(before),
+      after: nested({ ...after, [lockFile]: after[lockFile].replaceAll('"1.2.3"', '"1.2.4"') }),
+    })).toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
+    const oldParsedLock = JSON.parse(before[lockFile]);
+    for (const oldLock of [
+      { ...oldParsedLock, version: "1.2.2", packages: { ...oldParsedLock.packages, "": { ...oldParsedLock.packages[""], version: "1.2.2" } } },
+      { ...oldParsedLock, packages: { ...oldParsedLock.packages, "": { ...oldParsedLock.packages[""], version: "1.2.2" } } },
+    ]) {
+      expect(await headCheck({ before: { ...before, [lockFile]: JSON.stringify(oldLock) }, after }))
+        .toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
+    }
+    expect(await headCheck({ before: after, after: { ...after, [lockFile]: JSON.stringify(parsedLock, null, 3) } }))
+      .toEqual([expect.objectContaining({ severity: "fail", rule: "head" })]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -306,9 +320,10 @@ it("requires an actual old and new version before classifying a test replacement
 });
 
 it("requires the second parent to be on the base even when every resulting blob matches", async () => {
-  expect(await headCheck({
-    before: { "src/deleted.ts": "remove" }, after: {}, secondParent: OFFBASE,
-  })).toContainEqual({ severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read") });
+  // All three trees agree, so the refusal depends on the incoming parent's ancestry.
+  expect(await headCheck({ secondParent: OFFBASE })).toEqual([
+    expect.objectContaining({ severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read") }),
+  ]);
 });
 
 it.each([REVIEWED, HEAD])("refuses a truncated tree at %s", async (truncated) => {

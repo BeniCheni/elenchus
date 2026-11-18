@@ -770,7 +770,7 @@ describe("prep refusals", () => {
       expect(existsSync(marker)).toBe(false);
       expect(calls).toHaveBeenCalled();
       await expect(defaultRun("bash", ["-c", "true"], undefined, { root, places: [] })).rejects.toThrow(/command refused: bash/);
-      await expect(defaultRun("npm", ["--version"], undefined, { root, places: [] })).rejects.toThrow(/command refused: npm --version/);
+      await expect(defaultRun("npm", ["--version"], undefined, { root, places: [] })).rejects.toThrow(/command refused: npm/);
       const env = prepGitEnv({ PATH: "/usr/bin" });
       expect(env.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
       expect(env.GIT_CONFIG_VALUE_0).toBe("/dev/null");
@@ -868,4 +868,13 @@ it("prepares the configured re-read seat at the current head and marks the stamp
   expect(JSON.parse(readFileSync(report.stamp, "utf8"))).toMatchObject({
     expected_sha: made.second, pass: "2.5", reread: true,
   });
+  for (const initial of [records.slice(0, 4), records]) {
+    const pass = initial.length === 4 ? "2.5" : "1";
+    const initialRoot = path.join(made.dir, `fresh-${pass}`);
+    await expect(prepareSeat({
+      gh: client(made.second, initial, made.first), repo: "BeniCheni/elenchus", pr: 3,
+      pass, root: initialRoot, config: configured, cloneUrl: made.url, seatKeychainService: seatService,
+      ...route, run: runner(initialRoot, pass),
+    })).rejects.toThrow(/head .* is not the expected/);
+  }
 });
