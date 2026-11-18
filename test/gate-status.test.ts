@@ -22,20 +22,21 @@ it("names no status when the configured context is absent", async () => {
   ]), "team/repo", head, gate)).toBe("no status");
 });
 
-it("names every matching status's state and creator without inferring its App integration", async () => {
+it("names the latest matching status and earlier count per creator without inferring its App integration", async () => {
   const statuses = [
     { context: "REVIEW/READY", state: "success", creator: { login: "controller[bot]", type: "Bot" } },
     { context: gate.context, state: "failure", creator: { login: "admin", type: "User" } },
     { context: gate.context, state: "pending", creator: { login: "controller[bot]", type: "Bot" } },
+    { context: gate.context, state: "error", creator: { login: "controller[bot]", type: "Bot" } },
     { context: "other", state: "success", creator: { login: "unrelated", type: "User" } },
   ];
   expect(await readGateStatus(statusesOnly(statuses), "team/repo", head, gate)).toBe(
-    "success by controller[bot] (Bot), failure by admin (User), pending by controller[bot] (Bot)" + limitation,
+    "success by controller[bot] (Bot, 2 earlier statuses), failure by admin (User, 0 earlier statuses)" + limitation,
   );
 });
 
 it("keeps absent creator metadata unverified", async () => {
   expect(await readGateStatus(statusesOnly([
     { context: gate.context, state: "error" },
-  ]), "team/repo", head, gate)).toBe("error by unknown (unknown)" + limitation);
+  ]), "team/repo", head, gate)).toBe("error by unknown (unknown, 0 earlier statuses)" + limitation);
 });

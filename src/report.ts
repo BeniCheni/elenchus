@@ -14,6 +14,7 @@ import type {
 
 export function buildStatus(state: ReviewState): StatusView {
   const firstOpen = state.passes.find((pass) => pass.outcome.kind !== "recorded");
+  const notices = state.notices.filter(({ rule }) => rule === "config" || rule === "record replacement");
   return {
     repo: state.repo,
     pr: state.pr,
@@ -34,6 +35,7 @@ export function buildStatus(state: ReviewState): StatusView {
     merged: state.pull.merged === true,
     mergeCommit: state.pull.merged ? state.pull.merge_commit_sha ?? null : null,
     gateStatus: state.gateStatus,
+    ...(notices.length ? { notices } : {}),
   };
 }
 

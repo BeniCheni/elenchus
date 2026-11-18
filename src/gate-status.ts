@@ -11,10 +11,17 @@ export async function readGateStatus(gh: GhClient, repo: string, head: string, g
   const statuses = await gh.get(`/repos/${repo}/commits/${head}/statuses?per_page=100`, { paginate: true }) as Status[];
   const matching = statuses.filter((status) => status.context.toLowerCase() === gate.context.toLowerCase());
   if (matching.length === 0) return "no status";
-  const creators = matching.map((status) => {
-    const login = status.creator?.login ?? "unknown";
-    const type = status.creator?.type ?? "unknown";
-    return `${status.state} by ${login} (${type})`;
+  // The statuses endpoint returns newest first across pages.
+  const creators = new Map<string | undefined, { state: string; type: string; earlier: number }>();
+  for (const status of matching) {
+    const login = status.creator?.login;
+    const existing = creators.get(login);
+    if (existing) existing.earlier += 1;
+    else creators.set(login, { state: status.state, type: status.creator?.type ?? "unknown", earlier: 0 });
+  }
+  const summaries = [...creators].map(([login, { state, type, earlier }]) => {
+    const count = earlier === 1 ? "1 earlier status" : `${earlier} earlier statuses`;
+    return `${state} by ${login ?? "unknown"} (${type}, ${count})`;
   });
-  return `${creators.join(", ")}; source UNVERIFIED because GitHub's status API does not report which App posted it; the review gate's ruleset decides whether it counts`;
+  return `${summaries.join(", ")}; source UNVERIFIED because GitHub's status API does not report which App posted it; the review gate's ruleset decides whether it counts`;
 }

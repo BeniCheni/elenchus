@@ -94,6 +94,19 @@ describe("Keychain private-key hex decoding", () => {
       expect(output.every((byte) => byte === 0)).toBe(true);
     }
   });
+
+  it("rejects a non-lowercase-hex byte before allocating the decoded buffer", async () => {
+    const { decodeKeychainPrivateKey } = await import("../src/app-status.js");
+    const output = Buffer.from("0000000A\n");
+    const allocation = vi.spyOn(Buffer, "alloc");
+    try {
+      expect(() => decodeKeychainPrivateKey(output)).toThrow(/could not open/);
+      expect(allocation).not.toHaveBeenCalledWith(4);
+      expect(output.every((byte) => byte === 0)).toBe(true);
+    } finally {
+      allocation.mockRestore();
+    }
+  });
 });
 
 it("decodes the key on the real Keychain reader path before signing", async () => {
@@ -124,6 +137,29 @@ it("decodes the key on the real Keychain reader path before signing", async () =
     );
     expect(fetchStub).toHaveBeenCalledTimes(3);
     expect(output.every((byte) => byte === 0)).toBe(true);
+  } finally {
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  }
+});
+
+it("clears a partial stdout buffer when the mocked Keychain process reports an error", async () => {
+  const { AppStatusClient } = await import("../src/app-status.js");
+  const partial = Buffer.from("synthetic stdout");
+  vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
+    const callback = args.at(-1) as (error: Error, out: Buffer, stderr: Buffer) => void;
+    callback(new Error("synthetic failure"), partial, Buffer.alloc(0));
+    return {} as ReturnType<typeof execFile>;
+  });
+  const fetchStub = vi.fn();
+  vi.stubGlobal("fetch", fetchStub);
+  try {
+    await expect(new AppStatusClient().post({
+      repo: "owner/repo", pr: 9, context: "review/ready", sha,
+      appId: 10, keychainService: "synthetic-key-service",
+    })).rejects.toThrow(/could not open/);
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(partial.every((byte) => byte === 0)).toBe(true);
   } finally {
     vi.unstubAllGlobals();
     vi.clearAllMocks();

@@ -63,6 +63,9 @@ describe("seat record schema v1.2", () => {
   const record = {
     ...v1,
     schema_version: "1.2",
+    input_sha: "a".repeat(40),
+    output_sha: "c".repeat(40),
+    commits: ["b".repeat(40), "c".repeat(40)],
     pass: "independent synthesis",
     reread: true,
     next_route: {
@@ -79,6 +82,9 @@ describe("seat record schema v1.2", () => {
 
   it.each([
     { schema_version: "1.3" },
+    { input_sha: "abc1234" },
+    { output_sha: "abc1234" },
+    { commits: ["abc1234"] },
     { pass: "" },
     { reread: false },
     { extra: true },
@@ -102,6 +108,9 @@ describe("v1.2 closed object boundaries", () => {
   const complete = {
     ...v1,
     schema_version: "1.2",
+    input_sha: "a".repeat(40),
+    output_sha: "c".repeat(40),
+    commits: ["b".repeat(40), "c".repeat(40)],
     session: { id: "session", log: "metadata" },
     mode: { requested: null, observed: null },
     next_route: { runtime: "Codex", model: "gpt-6.1-sol", effort: "xhigh", recommended_by: null, confirmed_by: null },

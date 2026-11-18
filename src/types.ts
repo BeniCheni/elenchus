@@ -110,7 +110,7 @@ export type RequiredCheck = { name: string; app_id?: number };
 export type AllowedChanges = {
   paths: string[];
   reread_pass: string;
-  version_only?: { file: string; tests: string[] };
+  version_only?: { file: string; tests: string[]; pattern?: string };
 };
 
 export type GateConfig = {
@@ -134,6 +134,7 @@ export type Config = {
   finding_flow?: FindingFlow;
   escalate_to?: string;
   gate?: GateConfig;
+  unknownKeys?: string[];
 };
 
 export type GhComment = {
@@ -167,6 +168,8 @@ export type GhCompare = {
   files?: GhCompareFile[];
 };
 
+export type CompareCommits = (base: string, tip: string, paginate?: boolean) => Promise<GhCompare>;
+
 export type GhPull = {
   number: number;
   html_url?: string;
@@ -188,6 +191,7 @@ export type Attempt = {
   valid: boolean;
   reason: string | null;
   record: SeatRecord | null;
+  replaces?: number;
 };
 
 export type RangeCommit = { sha: string; author: string };
@@ -211,6 +215,7 @@ export type PassOutcome =
       commentUrl: string;
       authorLogin: string;
       history: RecordedPosting[];
+      posting: RecordedPosting;
       priorFailures: number;
       laterRejections: LaterRejection[];
     }
@@ -249,6 +254,7 @@ export type ReviewState = {
   pull: GhPull;
   gateStatus: string | null;
   config: Config;
+  compare: CompareCommits;
   passes: PassState[];
   orphans: Orphan[];
   notices: Notice[];
@@ -285,11 +291,12 @@ export type StatusView = {
   merged: boolean;
   mergeCommit: string | null;
   gateStatus: string | null;
+  notices?: Notice[];
 };
 
 export type Notice = {
   rule: string;
-  commentUrl: string;
+  commentUrl?: string;
   message: string;
 };
 

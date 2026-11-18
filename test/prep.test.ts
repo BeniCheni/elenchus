@@ -770,6 +770,7 @@ describe("prep refusals", () => {
       expect(existsSync(marker)).toBe(false);
       expect(calls).toHaveBeenCalled();
       await expect(defaultRun("bash", ["-c", "true"], undefined, { root, places: [] })).rejects.toThrow(/command refused: bash/);
+      await expect(defaultRun("npm", ["--version"], undefined, { root, places: [] })).rejects.toThrow(/command refused: npm --version/);
       const env = prepGitEnv({ PATH: "/usr/bin" });
       expect(env.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
       expect(env.GIT_CONFIG_VALUE_0).toBe("/dev/null");
@@ -843,11 +844,28 @@ it("stores only the reset and the configured seat helper and reads the pull requ
   expect(report.launch).toContain("/usr/bin/security find-generic-password");
 });
 
-it("requires a named seat Keychain item before cloning", async () => {
+it.each([undefined, "seat\nitem", "seat\ritem", "seat\0item"])("requires a single-line seat Keychain item before cloning (%j)", async (seatKeychainService) => {
   const made = origin();
   await expect(prepareSeat({
     gh: client(made.second, [seat("0", made.second)]),
+    seatKeychainService,
     repo: "BeniCheni/elenchus", pr: 3, pass: "1", ...route,
     root: path.join(made.dir, "seats"), config: config(), cloneUrl: made.url, run: runner(path.join(made.dir, "seats")),
   })).rejects.toThrow(/prep requires --seat-keychain-service/);
+});
+
+it("prepares the configured re-read seat at the current head and marks the stamp", async () => {
+  const made = origin();
+  const configured = config();
+  const root = path.join(made.dir, "reread-seats");
+  const records = configured.passes.map(({ id }) => seat(id, made.first));
+  const report = await prepareSeat({
+    gh: client(made.second, records, made.first), repo: "BeniCheni/elenchus", pr: 3,
+    pass: "2.5", root, config: configured, cloneUrl: made.url, seatKeychainService: seatService,
+    ...route, run: runner(root, "2.5"),
+  });
+  expect(report.head).toBe(made.second);
+  expect(JSON.parse(readFileSync(report.stamp, "utf8"))).toMatchObject({
+    expected_sha: made.second, pass: "2.5", reread: true,
+  });
 });

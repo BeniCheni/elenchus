@@ -5,7 +5,7 @@ import type { GhClient } from "./gh.js";
 import { runCommand } from "./gh.js";
 import { assertGitAllowed, type GitScope } from "./git.js";
 import { vendorForRuntime } from "./config.js";
-import { loadReview, recordTimeline } from "./load.js";
+import { loadReview, recordTimeline, rereadBoundary } from "./load.js";
 import { manifestFromNameStatus, type ManifestPath } from "./manifest.js";
 import { CODEX_PROFILE_LOADS, codexTrustConfig, profilePath, renderProfile, type VendorName } from "./profile.js";
 import { seatCredentialArgs, withSeatToken } from "./seat-credentials.js";
@@ -136,7 +136,9 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
     throw new Error(`${runtimeChoice} may not hold a read-only seat`);
   }
 
-  const expected = expectedSha(state, request.pass);
+  const boundary = rereadBoundary(state.config, state.passes);
+  const reread = boundary?.pass === request.pass && !sameSha(state.head, boundary.output_sha);
+  const expected = reread ? state.head : expectedSha(state, request.pass);
   if (!sameSha(state.head, expected)) {
     throw new Error(`head ${state.head} is not the expected ${expected}`);
   }
@@ -186,6 +188,7 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
       pr: request.pr,
       pass: request.pass,
       expected_sha: head,
+      ...(reread ? { reread: true } : {}),
       runtime,
       model,
       effort,
@@ -479,6 +482,8 @@ export async function defaultRun(
     assertGitAllowed(args, scope);
     return runCommand(command, args, { ...(cwd ? { cwd } : {}), env: prepGitEnv() });
   }
-  if (command !== "npm") throw new Error(`command refused: ${command}`);
+  if (command !== "npm" || args.length !== 1 || args[0] !== "ci") {
+    throw new Error(`command refused: ${command} ${args.join(" ")}`.trimEnd());
+  }
   return runCommand(command, args, cwd ? { cwd } : {});
 }

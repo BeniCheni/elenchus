@@ -7,6 +7,7 @@ import { validateSeatRecord } from "./schema.js";
 import { sameSha } from "./sha.js";
 import type {
   Attempt,
+  CompareCommits,
   Config,
   GhComment,
   GhCompare,
@@ -34,7 +35,10 @@ export async function loadReview(
     reviewBase(gh, repo, pull),
     gh.get(`/repos/${repo}/issues/${pr}/comments?per_page=100`, { paginate: true }) as Promise<GhComment[]>,
   ]);
-  const config = configOverride ?? await readConfig(gh, repo, baseSha);
+  const config = configOverride ?? await readConfig(gh, repo, baseSha).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`configuration: base ${pull.base.ref} ${baseSha}\n${message}`);
+  });
   const known = new Set(config.passes.map((pass) => pass.id));
   const { attempts, notices, unreadable } = parseAttempts(comments, config, known);
   const orphans = attempts
@@ -46,7 +50,9 @@ export async function loadReview(
       reason: attempt.reason ?? `pass ${attempt.pass} is not configured`,
     }));
   const passes = config.passes.map((pass) => passState(pass, attempts.filter((attempt) => attempt.pass === pass.id)));
-  const compared = await attachGit(gh, repo, pull.head.sha, baseSha, passes, config, {
+  const boundary = rereadBoundary(config, passes)?.output_sha;
+  const compare = reviewCompare(gh, repo, pull.head.sha, boundary);
+  const compared = await attachGit(gh, repo, pull.head.sha, baseSha, passes, config, compare, {
     ranges: options.ranges !== false && !pull.merged,
     merged: pull.merged === true,
   });
@@ -62,9 +68,10 @@ export async function loadReview(
     pull,
     gateStatus,
     config,
+    compare,
     passes: compared.passes,
     orphans,
-    notices,
+    notices: [...(config.unknownKeys ?? []).map((key) => ({ rule: "config", message: `unknown key ${key}` })), ...notices],
     unreadable: listedUnreadable(unreadable, compared.passes),
     inProgressPass: compared.inProgressPass,
   };
@@ -105,7 +112,7 @@ function parseAttempts(
 ): { attempts: Attempt[]; notices: Notice[]; unreadable: UnreadableEvent[] } {
   const ordered = [...comments].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id - b.id);
   const attempts: Attempt[] = [];
-  const latestByPass = new Map<string, SeatRecord>();
+  const latestByPass = new Map<string, RecordedPosting>();
   const notices: Notice[] = [];
   const unreadable: UnreadableEvent[] = [];
   for (const comment of ordered) {
@@ -155,8 +162,16 @@ function parseAttempts(
     if (pass !== null && (known.has(pass) || result.ok)) {
       const record = result.ok ? result.record : null;
       const prior = latestByPass.get(pass);
-      const reason = record ? rereadError(record, prior) : (result.ok ? null : result.reason);
-      if (record && reason === null) latestByPass.set(pass, record);
+      const reason = record ? rereadError(record, prior?.record) : (result.ok ? null : result.reason);
+      const replaces = record && prior && !record.reread && usesCurrentSchema(record, prior.record) && sameRange(record, prior.record)
+        ? prior.id : undefined;
+      if (record && reason === null) {
+        latestByPass.set(pass, { record, id: comment.id, createdAt: comment.created_at, commentUrl: comment.html_url });
+        if (replaces !== undefined) notices.push({
+          rule: "record replacement",
+          message: `pass ${pass} comment ${comment.id} replaces comment ${replaces} at the same SHAs`,
+        });
+      }
       attempts.push({
         pass,
         commentUrl: comment.html_url,
@@ -166,6 +181,7 @@ function parseAttempts(
         valid: reason === null,
         reason,
         record: reason === null ? record : null,
+        ...(replaces === undefined ? {} : { replaces }),
       });
       continue;
     }
@@ -178,10 +194,19 @@ function rereadError(record: SeatRecord, prior: SeatRecord | null | undefined): 
   if (record.reread) {
     if (!prior) return "a re-read requires an earlier record for this pass";
     if (sameSha(prior.output_sha, record.output_sha)) return "a re-read requires a later output_sha";
-  } else if (prior && (record.schema_version === "1.2" || prior.schema_version === "1.2")) {
+  } else if (prior && usesCurrentSchema(record, prior) && !sameRange(record, prior)) {
     return "a repeat of this pass must be marked as a re-read";
   }
   return null;
+}
+
+function usesCurrentSchema(record: SeatRecord, prior: SeatRecord): boolean {
+  return record.schema_version === "1.2" || prior.schema_version === "1.2";
+}
+
+function sameRange(record: SeatRecord, prior: SeatRecord): boolean {
+  return record.input_sha.toLowerCase() === prior.input_sha.toLowerCase() &&
+    record.output_sha.toLowerCase() === prior.output_sha.toLowerCase();
 }
 
 function failedAttempt(comment: GhComment, pass: string, reason: string): Attempt {
@@ -258,6 +283,7 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
         commentUrl: chosen.commentUrl,
         authorLogin: chosen.authorLogin,
         history: recordHistory(valid),
+        posting: chosen,
         priorFailures,
         laterRejections,
       },
@@ -277,10 +303,13 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
   };
 }
 
-function recordHistory(valid: RecordedPosting[]): RecordedPosting[] {
-  const firstReread = valid.findIndex(({ record }) => record.reread);
+function recordHistory(valid: (RecordedPosting & Pick<Attempt, "replaces">)[]): RecordedPosting[] {
+  // A correction has the same SHA range and keeps the original posting slot.
+  // Use the actual standing comment in the outcome for findings and ruling order.
+  const timeline = valid.filter(({ replaces }) => replaces === undefined);
+  const firstReread = timeline.findIndex(({ record }) => record.reread);
   // With no re-read, retain the last update just as legacy records have always done.
-  return valid.slice(firstReread === -1 ? -1 : firstReread - 1);
+  return timeline.slice(firstReread === -1 ? -1 : firstReread - 1);
 }
 
 export function postingOrder(a: RecordedPosting, b: RecordedPosting): number {
@@ -297,28 +326,34 @@ function isBefore(attempt: Attempt, other: Attempt): boolean {
   return attempt.createdAt < other.createdAt || (attempt.createdAt === other.createdAt && attempt.id < other.id);
 }
 
-class UnresolvedSha extends Error {
+export function rereadBoundary(config: Config, passes: PassState[]): SeatRecord | undefined {
+  const pass = passes.find(({ id }) => id === config.gate?.allowed_changes?.reread_pass);
+  return pass?.outcome.kind === "recorded" ? pass.outcome.record : undefined;
+}
+
+export class UnresolvedSha extends Error {
   constructor(readonly spec: string) {
     super(`cannot resolve ${spec}`);
     this.name = "UnresolvedSha";
   }
 }
 
-async function attachGit(
-  gh: GhClient,
-  repo: string,
-  head: string,
-  baseSha: string,
-  passes: PassState[],
-  config: Config,
-  options: { ranges: boolean; merged: boolean },
-): Promise<{ passes: PassState[]; inProgressPass: string | null }> {
+function reviewCompare(gh: GhClient, repo: string, head: string, boundary?: string): CompareCommits {
   const cache = new Map<string, GhCompare>();
-  const compare = async (base: string, tip: string, paginate = false): Promise<GhCompare> => {
+  return async (base, tip, paginate = false) => {
+    // Share the reviewed range with ancestry and seat reads, including legacy
+    // records that abbreviate the already known current head.
+    const reviewedRange = boundary && sameSha(base, boundary) && sameSha(tip, head) && !sameSha(boundary, head);
+    if (reviewedRange) {
+      base = boundary;
+      tip = head;
+    }
     const spec = `${base}...${tip}`;
     const key = paginate ? `${spec}?per_page=100` : spec;
     const hit = cache.get(`${spec}?per_page=100`) ?? cache.get(key);
     if (hit) return hit;
+    const singlePage = reviewedRange ? cache.get(spec) : undefined;
+    if (singlePage?.commits && singlePage.total_commits === singlePage.commits.length) return singlePage;
     try {
       const value = (await gh.get(`/repos/${repo}/compare/${key}`, paginate ? { paginate: true } : undefined)) as GhCompare;
       cache.set(key, value);
@@ -329,6 +364,18 @@ async function attachGit(
       throw error;
     }
   };
+}
+
+async function attachGit(
+  gh: GhClient,
+  repo: string,
+  head: string,
+  baseSha: string,
+  passes: PassState[],
+  config: Config,
+  compare: CompareCommits,
+  options: { ranges: boolean; merged: boolean },
+): Promise<{ passes: PassState[]; inProgressPass: string | null }> {
   const isAncestorOrEqual = async (ancestor: string, descendant: string): Promise<boolean> => {
     if (sameSha(ancestor, descendant)) return true;
     const result = await compare(ancestor, descendant);

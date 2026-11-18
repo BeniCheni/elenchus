@@ -157,8 +157,9 @@ async function main(argv: string[]): Promise<void> {
       dryRun: flags.dryRun,
       keychainService: flags.appKeychainService,
     });
+    process.stdout.write(`configuration: base ${result.baseRef} ${result.baseSha}\n`);
+    if (result.items.length) process.stdout.write(formatCheck(result.items));
     if (!result.ok) {
-      process.stdout.write(formatCheck(result.items));
       process.exitCode = 1;
     } else {
       const action = result.posted ? "posted" : "would post";

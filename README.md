@@ -20,8 +20,8 @@ adopting it:
 - [keel](https://github.com/BeniCheni/keel), whose seats already post records by hand, read back
   with `status` and `check`.
 - [Kickoff](https://github.com/BeniCheni/kickoff), where the review method was first run by hand.
-  A replay of one of its reviews is this repository's live fixture, and its own seats start
-  posting records after its v0.6.0 release.
+  A replay of one of its reviews is this repository's live fixture. Posting records in Kickoff
+  is planned for its adoption phase.
 
 Any repository on GitHub can adopt it the same way.
 
@@ -84,6 +84,9 @@ recorded SHA chain. A record can include `next_route` with `runtime`, `model`, `
 `recommended_by` and `confirmed_by`. `prep` uses that route, with each flag overriding its
 corresponding field, and records each choice in the stamp. Optional
 `coverage.reviewed_paths` accounts for each manifest path alongside `skipped`.
+A later unmarked correction at the same input and output SHAs replaces the standing v1.2
+record in its existing slot. Both `status` and `check` name the two comment IDs. v1.2 SHA
+fields use all 40 hex digits.
 
 ## Commands
 
@@ -97,8 +100,9 @@ corresponding field, and records each choice in the stamp. Optional
 
 `<pr>` is `owner/repo#n` or a pull-request URL. `check` exits 0 with no `FAIL`, 1 with one, and
 2 when it cannot run. `authorize` exits 1 for each refusal and 2 for an execution error.
-It uses the configuration at the pull request's base SHA. It posts only success, at the head
-it evaluated. Its output lists each blocker when it refuses.
+It reads configuration at the base branch's tip and prints that ref and commit in its decision.
+It posts only success, at the evaluated head. The decision lists each blocker and the shape
+that admitted each qualifying commit after the review.
 
 `check`'s rules:
 
@@ -117,25 +121,31 @@ it evaluated. Its output lists each blocker when it refuses.
 | `finding-carry` | Every finding opened by `finding_flow.opens` appears in each `finding_flow.carries` pass. |
 | `coverage` | For passes marked `coverage`, the record accounts for every path in the diff. Named reviewed paths must match the manifest without gaps or overlap. |
 | `head` | Commits after the last review fall within the configured allowed set or need a re-read. |
-| `ci` | Each configured check is successful at the evaluated head and comes from its required App when pinned. |
-| `ruling` | A contested synthesis finding requires a later ruling record before authorization. |
+| `ci` | When the head has moved past the reviewed boundary, each configured check is successful at that head and comes from its required App when pinned. |
+
+`authorize` also requires all configured passes to have valid records, enforces configured
+UNVERIFIED blockers, requires full output SHAs for the head decision, and checks CI even at
+the reviewed head. For every contested finding in the last carrying pass's standing record,
+the ruling pass must repeat its ID with a status other than `contested`. The ruling must be
+posted after that standing record, including a synthesis re-read. Seats follow the roster's
+vendor separation as a human review rule.
 
 A merged pull request is named in one line. Its base is the merge commit's first parent when
 available, and range rules are skipped. A comparison with 300 or more files uses the merge
 base's and input commit's recursive trees to reconstruct coverage, with renames represented
 as a deletion and an addition. A truncated tree fails the coverage check.
 
-For the configured gate context at the head, `status` names each status's state and its
-creator's login and account type. Its source is UNVERIFIED because GitHub's status API
+For the configured gate context at the head, `status` names the latest state for each
+creator's login and account type and counts that creator's earlier statuses. Its source is
+UNVERIFIED because GitHub's status API
 does not report which App posted it; the review gate's ruleset decides whether it counts.
 This applies to bots and people: a person's status can carry an App's integration when
 posted with that App's user token. This display limitation adds no check rule or authorize
 blocker. When the context has no status, the gate line says `no status`.
 
-`prep` refuses rather than guess: it names the first earlier pass with no record, a head that
-moved after the last record, a route that is not in the configuration's tables, a vendor that
-may not hold that kind of seat, a seat still open on that pull request, or a pull request from
-a fork.
+`prep` refuses an earlier missing record, unexpected head, unconfigured route, ineligible vendor,
+open seat or fork. When the configured review pass has a standing record and the head has moved,
+`prep` for that pass expects the current head and writes `reread: true` in its stamp.
 
 ## Configuration
 
@@ -182,14 +192,29 @@ Optional `finding_flow` names `opens`, ordered `carries`, and the later `ruling`
 `escalate_to` supplies the escalation addressee. `gate` declares the status `context`,
 `app_id`, `required_checks` (each `name` and optional `app_id`),
 `blocking_unverified` rules, and `allowed_changes`. The allowed set names `paths`,
-`reread_pass` and an optional `version_only` pair of the version `file` and test globs.
+`reread_pass` and optional `version_only` settings for the version `file`, test globs and
+`pattern`. The default version pattern accepts `MAJOR.MINOR.PATCH` with an optional
+prerelease. `authorize` requires `finding_flow.ruling` and at least one required check.
+Unknown configuration keys produce notices in `status` and `check` and refusals in `authorize`.
 The adoption example blocks unverified coverage.
 
-After review, a commit qualifies when it changes only configured paths, or changes a test
-only through exact old-to-new version substitutions. A two-parent base merge qualifies when
-each path changed from its first parent has the second parent's object and mode, including
-deletions. Other commits need the configured review pass's re-read at their SHA. Required CI
-checks must be green at the new head.
+The reviewed boundary is the standing record of `reread_pass`. Commits after it, including
+executor commits, need green CI at the new head and one of these shapes.
+
+- Configured paths and version-only changes. The version file and its install directory's
+  lockfile always get a parsed JSON comparison, even when a path glob covers them. Only the
+  version file's `version` and the lockfile's `version` and `packages[""].version` may change
+  from the old valid version to the new valid version.
+- Test changes by exact substitution of the old valid version string with the new valid string.
+- A two-parent merge whose incoming parent is on the base branch. For each path, compare
+  the two parents to their merge base. If only one side changes an entry, the result must
+  carry that side's object and mode, including deletions. If both sides agree, the result
+  must carry their shared entry. If both sides change it differently, a re-read is required.
+
+Other commits need the configured review pass's re-read at their SHA. Before the review,
+`authorize` counts a matching `verify` from a workflow the pull request defines or edits.
+Passes 1 and 2.5 reading that workflow are the safeguard at that stage. After review in the
+adopter's configuration, `.github/` falls outside the allowed paths and an edit needs a re-read.
 
 ### App and seat credentials
 
@@ -198,8 +223,10 @@ webhooks off, installed on the intended repository. The App id belongs in `gate.
 Its RSA private key is a macOS Keychain generic password whose access controls prompt on
 every read. `authorize --app-keychain-service <name>` reads it into memory through
 `/usr/bin/security`. The reader accepts SecurityTool's lowercase
-hex output followed by one newline, decodes the PEM bytes in memory, and clears both buffers.
-The key is used to sign a JWT with Node's crypto library.
+hex output followed by one newline and decodes the PEM bytes in memory. The reader clears
+the `execFile` callback's stdout buffer, and the decoder clears its input and decoded PEM
+buffer. Node manages the underlying stdout stream chunks and the crypto `KeyObject` used
+to sign the JWT. Those allocations may retain key material until Node reclaims them.
 
 Store the key's exact PEM bytes using `security -i` on standard input. In the interactive
 command, `-X` takes the file's hex. For example, the operator can run this locally, replacing
@@ -210,12 +237,12 @@ python3 - /path/to/app-private-key.pem <<'PYKEY' | /usr/bin/security -i
 from pathlib import Path
 import sys
 key = Path(sys.argv[1]).read_bytes()
-print('add-generic-password -a "review-controller" -s "your-app-key-service" -X ' + key.hex())
+print('add-generic-password -a "review-controller" -s "your-app-key-service" -T "" -X ' + key.hex())
 PYKEY
 ```
 
-Set the item's access controls in Keychain Access to prompt for every read with no trusted
-application, then delete the downloaded PEM file.
+`-T ""` creates the item with an empty trusted-application list. Delete the downloaded PEM
+file after storing the key.
 
 Seats use a fine-grained token limited to the adopter repository, with Contents and Pull
 requests read and write and Metadata read. Administration, Workflows and Commit statuses
@@ -224,19 +251,25 @@ name to `prep --seat-keychain-service <name>`. To store the printable token, pla
 last so `security` prompts for its value.
 
 ```bash
-/usr/bin/security add-generic-password -a "review-seat" -s "your-seat-token-service" -w
+/usr/bin/security add-generic-password -a "review-seat" -s "your-seat-token-service" -T "" -w
 ```
 
-Set this item's access controls to prompt for every read with no trusted application.
+To inspect either list, find the service in Keychain Access, open **Get Info** and select
+**Access Control**. Leave **Show password** unchecked. Confirm the item requires approval
+and its trusted-application list is empty.
 
 The clone resets inherited credential helpers and installs its own helper that reads that
 item for HTTPS github.com requests. The printed launch line reads the same item by command
 substitution and supplies `GH_TOKEN` to the vendor CLI. The stamp and launch line hold the
-service name. Each read prompts the operator.
+service name. Each read prompts the operator while the item requires confirmation and the
+trusted-application list is empty. Choose **Allow** for one read. Never choose **Always Allow**,
+which adds `/usr/bin/security` to the list and makes later reads silent. If this happens,
+rotate the credentials and re-create both items before running the live gate again.
 
-A seat runs as the operator's macOS user and can still reach the operator's own `gh` login.
-D1's ruleset pin to the GitHub App keeps a seat from satisfying the review gate. D9 scopes
-the credentials that prep configures.
+A seat runs as the operator's macOS user and can reach that user's `gh` login and SSH keys.
+The credential-helper reset and override live in the clone's local Git configuration, which
+the seat can edit with `git config --local --unset-all credential.helper`. GitHub's ruleset
+requires the configured App's review status. The seat token has its own repository scope.
 
 ## Boundaries
 
@@ -284,7 +317,7 @@ and a merge waits for that proof. In order:
    instructions, and release blocks that derive the base branch and merge commit from the
    pull request. Then the gate on adopter default branches, including the bot-workflow path.
 5. **Seats that start themselves.** `elenchus run` launches a confirmed route and checks its
-   observation before the seat pushes. Claude Code first, then Codex, then Cursor writing seats.
+   observation before the seat pushes. Claude Code first, then Codex.
 
 Deferred: a graphical viewer, and seats from vendors beyond these three.
 

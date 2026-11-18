@@ -113,8 +113,11 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
     writeFileSync(path.join(fixtures, `${encodeURIComponent(apiPath)}.json`), JSON.stringify(value));
   };
   const baseConfig = kickoffConfig();
-  baseConfig.passes = [{ id: "0", role: "review", seat: "reviewer", coverage: options.omitCoverage === true }];
-  delete baseConfig.finding_flow;
+  baseConfig.passes = [
+    { id: "0", role: "review", seat: "reviewer", coverage: options.omitCoverage === true },
+    { id: "ruling", role: "ruling", seat: "maintainer" },
+  ];
+  baseConfig.finding_flow = { opens: "0", carries: [], ruling: "ruling" };
   delete baseConfig.gate!.allowed_changes;
   baseConfig.gate!.app_id = 459;
   write("/repos/BeniCheni/elenchus/pulls/1", { number: 1, state: "open", head: { sha }, base: { sha, ref: "trunk" } });
@@ -122,17 +125,17 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
   write(`/repos/BeniCheni/elenchus/contents/.elenchus.json?ref=${sha}`, {
     content: Buffer.from(JSON.stringify(baseConfig)).toString("base64"),
   });
-  write("/repos/BeniCheni/elenchus/issues/1/comments?per_page=100", options.incomplete ? [] : [{
-    id: 1, html_url: "https://github.com/BeniCheni/elenchus/pull/1#issuecomment-1",
-    user: { login: "BeniCheni" }, created_at: "2026-11-14T00:00:01Z",
+  write("/repos/BeniCheni/elenchus/issues/1/comments?per_page=100", options.incomplete ? [] : ["0", "ruling"].map((pass, i) => ({
+    id: i + 1, html_url: `https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${i + 1}`,
+    user: { login: "BeniCheni" }, created_at: `2026-11-14T00:00:0${i + 1}Z`,
     body: fenced({
-      seat_record: 1, schema_version: "1.2", pr: 1, pass: "0", runtime: "Codex",
+      seat_record: 1, schema_version: "1.2", pr: 1, pass, runtime: "Codex",
       model: { requested: "gpt-6.1-sol", observed: null, source: "not reported" },
       effort: { requested: "xhigh", observed: null, source: "not reported" },
       route: { recommended_by: null, confirmed_by: null },
       input_sha: sha, output_sha: sha, commits: [], findings: [], verdict: "ok",
     }),
-  }]);
+  })));
   write(`/repos/BeniCheni/elenchus/commits/${sha}/check-runs?filter=latest&per_page=100`, {
     check_runs: [{ name: "verify", app: { id: 15368 }, head_sha: sha, status: "completed", conclusion: options.red ? "failure" : "success" }],
   });
@@ -142,10 +145,11 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
   });
 }
 
-it("runs authorize dry-run through the installed command's normal entry point", () => {
+it("runs authorize dry-run through dist/cli.js in the repository", () => {
   const result = authorizeCli();
   expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toBe(`would post kickoff/360 success on ${"1".repeat(40)}\n`);
+  const base = `configuration: base trunk ${"1".repeat(40)}\n`;
+  expect(result.stdout).toBe(`${base}would post kickoff/360 success on ${"1".repeat(40)}\n`);
   for (const [options, expected] of [
     [{ red: true }, /FAIL ci verify .*failure/],
     [{ incomplete: true }, /FAIL records pass 0 no valid record/],
@@ -153,6 +157,7 @@ it("runs authorize dry-run through the installed command's normal entry point", 
   ] as const) {
     const rejected = authorizeCli(options);
     expect(rejected.status, rejected.stderr).toBe(1);
+    expect(rejected.stdout.startsWith(base)).toBe(true);
     expect(rejected.stdout).toMatch(expected);
   }
 });

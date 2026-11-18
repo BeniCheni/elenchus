@@ -25,6 +25,7 @@ export function formatStatus(view: StatusView): string {
   for (const item of view.unreadable) {
     lines.push(`unreadable pass: ${item.commentUrl} ${item.reason}`);
   }
+  for (const notice of view.notices ?? []) lines.push(`NOTICE ${notice.rule} ${notice.message}`);
   if (view.headNote) lines.push(view.headNote);
   if (view.gateStatus) lines.push(`gate: ${view.gateStatus}`);
   lines.push("");

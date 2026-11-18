@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../src/config.js";
-import { kickoffConfig } from "./graph.js";
+import { formatCheck, formatStatus } from "../src/format.js";
+import { loadReview } from "../src/load.js";
+import { buildCheck, buildStatus } from "../src/report.js";
+import { graphGh, kickoffConfig } from "./graph.js";
 
 describe("repository policy configuration", () => {
   it("keeps policy fields optional for commands that do not consume them", () => {
@@ -37,5 +40,32 @@ describe("repository policy configuration", () => {
       delete config.finding_flow;
     }
     expect(() => parseConfig({ ...config, ...change })).toThrow(/config\./);
+  });
+
+  it("reports unknown keys at each config level and leaves status and check usable", async () => {
+    const raw = kickoffConfig();
+    const fields = {
+      "config": raw,
+      "config.passes[0]": raw.passes[0],
+      "config.vendors.codex": raw.vendors.codex,
+      "config.installs[0]": raw.installs![0],
+      "config.handoff": raw.handoff,
+      "config.finding_flow": raw.finding_flow,
+      "config.gate": raw.gate,
+      "config.gate.required_checks[0]": raw.gate!.required_checks[0],
+      "config.gate.allowed_changes": raw.gate!.allowed_changes,
+      "config.gate.allowed_changes.version_only": raw.gate!.allowed_changes!.version_only,
+    };
+    for (const entry of Object.values(fields)) Object.assign(entry!, { typo: true });
+    const sha = "a".repeat(40);
+    const gh = graphGh({ head: sha, baseSha: sha, nodes: { [sha]: { parents: [], author: "Test" } }, comments: [] });
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, parseConfig(raw));
+    const status = formatStatus(buildStatus(state));
+    const check = formatCheck(buildCheck(state));
+    for (const path of Object.keys(fields)) {
+      expect(status).toContain(`NOTICE config unknown key ${path}.typo`);
+      expect(check).toContain(`NOTICE config unknown key ${path}.typo`);
+    }
+    expect(check).not.toMatch(/^FAIL /m);
   });
 });

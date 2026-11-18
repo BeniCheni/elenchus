@@ -1,9 +1,12 @@
 import { posix } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { GhClient } from "./gh.js";
-import { recordTimeline } from "./load.js";
+import { recordTimeline, rereadBoundary, UnresolvedSha } from "./load.js";
 import { diffTrees, readTree } from "./manifest.js";
-import { sameSha } from "./sha.js";
-import type { AllowedChanges, CheckItem, GhCompare, GhCompareCommit, ReviewState } from "./types.js";
+import { FULL_SHA, sameSha } from "./sha.js";
+import type { AllowedChanges, CheckItem, GhCompareCommit, ReviewState } from "./types.js";
+
+const DEFAULT_VERSION_PATTERN = "(?:0|[1-9][0-9]*)(?:\\.(?:0|[1-9][0-9]*)){2}(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?";
 
 type CheckRun = {
   name: string;
@@ -16,31 +19,36 @@ type CheckRun = {
 export async function checkHead(gh: GhClient, state: ReviewState, forAuthorization = false): Promise<CheckItem[]> {
   const gate = state.config.gate;
   const allowed = gate?.allowed_changes;
-  const allRecorded = state.passes.every(({ outcome }) => outcome.kind === "recorded");
-  const lastPass = state.passes.at(-1)?.id;
-  const rereadPass = allowed?.reread_pass ?? lastPass;
-  // A later re-read of a different seat can update that seat's record, but it
-  // cannot stand in for the review required at a changed head.
-  const last = allRecorded ? recordTimeline(state.passes).filter(({ record }) =>
-    record.reread ? record.pass === rereadPass : record.pass === lastPass,
-  ).at(-1) : undefined;
-  const changed = last && !sameSha(state.head, last.record.output_sha);
+  const lastPass = state.passes.at(-1);
+  const last = lastPass?.outcome.kind === "recorded" ? lastPass.outcome.record : undefined;
+  const boundary = allowed ? rereadBoundary(state.config, state.passes) : last;
+  const rereadPass = allowed?.reread_pass ?? lastPass?.id;
+  const changed = boundary && !sameSha(state.head, boundary.output_sha);
   if (state.pull.merged || (!changed && !forAuthorization)) return [];
 
   const items = gate ? await checkRequiredRuns(gh, state) : [];
+  if (forAuthorization) {
+    const latest = recordTimeline(state.passes).at(-1)?.record;
+    const outputs = new Set([boundary?.output_sha, last?.output_sha, latest?.output_sha]);
+    for (const output of outputs) {
+      if (output !== undefined && !FULL_SHA.test(output)) {
+        items.push(headFailure(`output_sha ${output} must be a full 40-digit SHA for authorize`));
+      }
+    }
+  }
   if (!changed) return items;
-  const reviewed = last.record.output_sha;
+  const reviewed = boundary.output_sha;
   const reread = rereadPass ? `pass ${rereadPass} re-read` : "re-read";
   if (!allowed) {
     items.push(headFailure(`head ${state.head} differs from ${reviewed}; needs a ${reread}`));
     return items;
   }
 
-  const difference = await gh.get(
-    `/repos/${state.repo}/compare/${reviewed}...${state.head}?per_page=100`,
-    { paginate: true },
-  ) as GhCompare;
-  if (difference.status !== "ahead") {
+  const difference = await state.compare(reviewed, state.head, true).catch((error: unknown) => {
+    if (error instanceof UnresolvedSha) return null;
+    throw error;
+  });
+  if (difference?.status !== "ahead") {
     items.push(headFailure(`head ${state.head} does not advance from ${reviewed}; needs a ${reread}`));
     return items;
   }
@@ -50,11 +58,12 @@ export async function checkHead(gh: GhClient, state: ReviewState, forAuthorizati
     return items;
   }
 
-  const proof = new HeadChanges(gh, state, reviewed, allowed);
+  const canonicalBoundary = difference.base_commit?.sha ?? reviewed;
+  const proof = new HeadChanges(gh, state, canonicalBoundary, allowed);
   const parentOf = new Map(commits.map((commit) => [commit.sha, commit.parents?.[0]?.sha]));
   // The commits brought in by a verified base merge were reviewed on the
   // base branch. Classify the merge itself and the PR's first-parent chain.
-  const onBranch = firstParentChain(state.head, reviewed, parentOf);
+  const onBranch = firstParentChain(state.head, canonicalBoundary, parentOf);
   if (!onBranch) {
     items.push(headFailure(`head ${state.head} does not continue ${reviewed} on its first-parent chain; needs a ${reread}`));
     return items;
@@ -128,31 +137,45 @@ class HeadChanges {
     if (!parent || parents.length > 2) return null;
     const [before, after] = await Promise.all([this.tree(parent), this.tree(commit.sha)]);
     if (before.truncated || after.truncated) return null;
-    const paths = diffTrees(before.tree, after.tree).map(({ path }) => path);
     const previous = pathIndex(before);
     const next = pathIndex(after);
     if (parents.length === 2) {
       const second = parents[1]!.sha;
       if (!await this.onBase(second)) return null;
-      const base = await this.tree(second);
-      if (base.truncated) return null;
-      const incoming = pathIndex(base);
-      const takesIncoming = paths.every((path) => sameEntry(next.get(path), incoming.get(path)));
-      return takesIncoming ? "merge of the base branch" : null;
+      return await this.cleanMerge(parent, second, previous, next) ? "merge of the base branch" : null;
     }
 
-    const outside = paths.filter((path) => !this.allowed.paths.some((pattern) => posix.matchesGlob(path, pattern)));
-    if (outside.length === 0) return "only configured paths";
+    const paths = diffTrees(before.tree, after.tree).map(({ path }) => path);
     const version = this.allowed.version_only;
+    const versionFile = posix.normalize(version?.file ?? "package.json");
+    const versionDir = posix.dirname(versionFile);
+    const install = this.state.config.installs?.find(({ dir }) => posix.normalize(dir) === versionDir);
+    const lockFile = posix.join(versionDir, install?.lockfile ?? "package-lock.json");
+    const outside = paths.filter((path) => path !== versionFile && path !== lockFile &&
+      !this.allowed.paths.some((pattern) => posix.matchesGlob(path, pattern)));
+    const changesVersion = paths.includes(versionFile);
+    const changesLock = paths.includes(lockFile);
+    if (outside.length === 0 && !changesVersion && !changesLock) return "only configured paths";
     if (!version || outside.some((path) => !version.tests.some((pattern) => posix.matchesGlob(path, pattern)))) {
       return null;
     }
-    const newVersion = await this.version(next.get(version.file));
-    let oldVersion = await this.version(previous.get(version.file));
+    const pattern = new RegExp(`^(?:${version.pattern ?? DEFAULT_VERSION_PATTERN})$`);
+    const [beforeVersion, afterVersion] = await Promise.all([
+      this.json(previous.get(versionFile)), this.json(next.get(versionFile)),
+    ]);
+    const newVersion = versionOf(afterVersion, pattern);
+    let oldVersion = versionOf(beforeVersion, pattern);
+    if (!newVersion || !oldVersion) return null;
+    if (changesVersion && (oldVersion === newVersion || !sameFileMode(previous, next, versionFile) ||
+        !isDeepStrictEqual({ ...beforeVersion, version: newVersion }, afterVersion))) return null;
+    if (changesLock && (!sameFileMode(previous, next, lockFile) || !await this.versionOnlyLock(
+      previous.get(lockFile), next.get(lockFile), oldVersion, newVersion, pattern,
+    ))) return null;
+    if (outside.length === 0) return "version files only";
     if (oldVersion === newVersion) {
       const reviewTree = await this.tree(this.reviewed);
       if (reviewTree.truncated) return null;
-      oldVersion = await this.version(pathIndex(reviewTree).get(version.file));
+      oldVersion = versionOf(await this.json(pathIndex(reviewTree).get(versionFile)), pattern);
     }
     if (!oldVersion || !newVersion || oldVersion === newVersion) return null;
     for (const path of outside) {
@@ -166,6 +189,45 @@ class HeadChanges {
     return "test version replacement";
   }
 
+  private async cleanMerge(
+    first: string, second: string, ours: Map<string, TreeEntry>, result: Map<string, TreeEntry>,
+  ): Promise<boolean> {
+    const compare = await this.state.compare(first, second).catch((error: unknown) => {
+      if (error instanceof UnresolvedSha) return null;
+      throw error;
+    });
+    const ancestor = compare?.merge_base_commit?.sha;
+    if (!ancestor) return false;
+    const [baseTree, incomingTree] = await Promise.all([this.tree(ancestor), this.tree(second)]);
+    if (baseTree.truncated || incomingTree.truncated) return false;
+    const base = pathIndex(baseTree);
+    const incoming = pathIndex(incomingTree);
+    const paths = new Set([...base.keys(), ...ours.keys(), ...incoming.keys(), ...result.keys()]);
+    for (const path of paths) {
+      const original = base.get(path);
+      const left = ours.get(path);
+      const right = incoming.get(path);
+      const expected = sameEntry(original, left) ? right : left;
+      if (!sameEntry(original, left) && !sameEntry(original, right) && !sameEntry(left, right)) return false;
+      if (!sameEntry(expected, result.get(path))) return false;
+    }
+    return true;
+  }
+
+  private async versionOnlyLock(
+    before: TreeEntry | undefined, after: TreeEntry | undefined, oldVersion: string, newVersion: string, pattern: RegExp,
+  ): Promise<boolean> {
+    const [from, to] = await Promise.all([this.json(before), this.json(after)]);
+    const packages = jsonObject(from?.packages);
+    const root = jsonObject(packages?.[""]);
+    const lockVersion = versionOf(from, pattern);
+    if (!root || !lockVersion || lockVersion === newVersion || root.version !== lockVersion ||
+        (oldVersion !== newVersion && lockVersion !== oldVersion)) return false;
+    return isDeepStrictEqual({
+      ...from, version: newVersion, packages: { ...packages, "": { ...root, version: newVersion } },
+    }, to);
+  }
+
   private tree(sha: string): Promise<GitTree> {
     const prior = this.trees.get(sha);
     if (prior) return prior;
@@ -176,17 +238,19 @@ class HeadChanges {
 
   private async onBase(sha: string): Promise<boolean> {
     if (sameSha(sha, this.state.baseSha)) return true;
-    const compare = await this.gh.get(`/repos/${this.state.repo}/compare/${sha}...${this.state.baseSha}?per_page=1`) as GhCompare;
-    return compare.status === "ahead" || compare.status === "identical";
+    const compare = await this.state.compare(sha, this.state.baseSha).catch((error: unknown) => {
+      if (error instanceof UnresolvedSha) return null;
+      throw error;
+    });
+    return compare?.status === "ahead" || compare?.status === "identical";
   }
 
-  private async version(entry: TreeEntry | undefined): Promise<string | null> {
+  private async json(entry: TreeEntry | undefined): Promise<Record<string, unknown> | null> {
     if (!entry) return null;
     const text = await this.text(entry);
     if (text === null) return null;
     try {
-      const value = JSON.parse(text) as { version?: unknown } | null;
-      return typeof value?.version === "string" ? value.version : null;
+      return jsonObject(JSON.parse(text) as unknown);
     } catch {
       return null;
     }
@@ -209,6 +273,19 @@ class HeadChanges {
     this.blobs.set(entry.sha, pending);
     return pending;
   }
+}
+
+function jsonObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function versionOf(value: Record<string, unknown> | null, pattern: RegExp): string | null {
+  const version = value?.version;
+  return typeof version === "string" && pattern.exec(version)?.[0] === version ? version : null;
+}
+
+function sameFileMode(before: Map<string, TreeEntry>, after: Map<string, TreeEntry>, path: string): boolean {
+  return before.get(path)?.mode === after.get(path)?.mode;
 }
 
 function pathIndex(tree: GitTree): Map<string, TreeEntry> {

@@ -3,14 +3,15 @@ import type { Config, FindingFlow, GateConfig, HandoffConfig, InstallConfig, Sea
 const SEAT_KINDS: readonly SeatKind[] = ["writing", "read-only", "none"];
 
 export function parseConfig(value: unknown): Config {
-  if (!value || typeof value !== "object") throw new Error("config is not an object");
-  const raw = value as Record<string, unknown>;
+  const unknownKeys: string[] = [];
+  const raw = fields(value, "config", unknownKeys, [
+    "passes", "vendors", "retry_cap", "record_authors", "forbidden", "installs", "handoff", "finding_flow", "escalate_to", "gate",
+  ]);
   if (!Array.isArray(raw.passes) || raw.passes.length === 0) {
     throw new Error("config.passes is missing");
   }
   const passes = raw.passes.map((entry, index) => {
-    if (!entry || typeof entry !== "object") throw new Error(`config.passes[${index}] is not an object`);
-    const pass = entry as Record<string, unknown>;
+    const pass = fields(entry, `config.passes[${index}]`, unknownKeys, ["id", "role", "seat", "seat_kind", "coverage"]);
     if (typeof pass.id !== "string" || pass.id.length === 0 || typeof pass.role !== "string" || typeof pass.seat !== "string") {
       throw new Error(`config.passes[${index}] needs id, role and seat`);
     }
@@ -34,29 +35,29 @@ export function parseConfig(value: unknown): Config {
     throw new Error("config.record_authors must list the GitHub logins whose comments may carry records");
   }
   if (!raw.vendors || typeof raw.vendors !== "object") throw new Error("config.vendors is missing");
-  const vendors: Config["vendors"] = {};
-  for (const [name, entry] of Object.entries(raw.vendors as Record<string, unknown>)) {
-    vendors[name] = parseVendor(name, entry);
-  }
+  const vendors = Object.fromEntries(Object.entries(object(raw.vendors, "config.vendors"))
+    .map(([name, entry]) => [name, parseVendor(name, entry, unknownKeys)]));
   const passIds = passes.map(({ id }) => id);
   const escalation = optionalString(raw.escalate_to, "config.escalate_to");
-  return {
+  const config: Config = {
     passes,
     vendors,
     retry_cap: raw.retry_cap,
     record_authors: raw.record_authors as string[],
     ...(raw.forbidden !== undefined ? { forbidden: stringList(raw.forbidden, "config.forbidden") } : {}),
-    ...(raw.installs !== undefined ? { installs: parseInstalls(raw.installs) } : {}),
-    ...(raw.handoff !== undefined ? { handoff: parseHandoff(raw.handoff) } : {}),
-    ...(raw.finding_flow !== undefined ? { finding_flow: parseFindingFlow(raw.finding_flow, passIds) } : {}),
+    ...(raw.installs !== undefined ? { installs: parseInstalls(raw.installs, unknownKeys) } : {}),
+    ...(raw.handoff !== undefined ? { handoff: parseHandoff(raw.handoff, unknownKeys) } : {}),
+    ...(raw.finding_flow !== undefined ? { finding_flow: parseFindingFlow(raw.finding_flow, passIds, unknownKeys) } : {}),
     ...(escalation !== undefined ? { escalate_to: escalation } : {}),
-    ...(raw.gate !== undefined ? { gate: parseGate(raw.gate, passIds) } : {}),
+    ...(raw.gate !== undefined ? { gate: parseGate(raw.gate, passIds, unknownKeys) } : {}),
   };
+  if (unknownKeys.length) config.unknownKeys = unknownKeys;
+  return config;
 }
 
-function parseFindingFlow(value: unknown, passIds: string[]): FindingFlow {
+function parseFindingFlow(value: unknown, passIds: string[], unknownKeys: string[]): FindingFlow {
   const label = "config.finding_flow";
-  const raw = object(value, label);
+  const raw = fields(value, label, unknownKeys, ["opens", "carries", "ruling"]);
   const opens = configuredPass(raw.opens, `${label}.opens`, passIds);
   const carries = stringList(raw.carries, `${label}.carries`)
     .map((id) => configuredPass(id, `${label}.carries`, passIds));
@@ -69,15 +70,15 @@ function parseFindingFlow(value: unknown, passIds: string[]): FindingFlow {
   return { opens, carries, ...(ruling !== undefined ? { ruling } : {}) };
 }
 
-function parseGate(value: unknown, passIds: string[]): GateConfig {
+function parseGate(value: unknown, passIds: string[], unknownKeys: string[]): GateConfig {
   const label = "config.gate";
-  const raw = object(value, label);
+  const raw = fields(value, label, unknownKeys, ["context", "app_id", "required_checks", "blocking_unverified", "allowed_changes"]);
   const context = nonemptyString(raw.context, `${label}.context`);
   const appId = raw.app_id === undefined ? undefined : positiveId(raw.app_id, `${label}.app_id`);
   if (!Array.isArray(raw.required_checks)) throw new Error(`${label}.required_checks must be an array`);
   const requiredChecks = raw.required_checks.map((entry, index) => {
     const field = `${label}.required_checks[${index}]`;
-    const check = object(entry, field);
+    const check = fields(entry, field, unknownKeys, ["name", "app_id"]);
     return {
       name: nonemptyString(check.name, `${field}.name`),
       ...(check.app_id !== undefined ? { app_id: positiveId(check.app_id, `${field}.app_id`) } : {}),
@@ -89,7 +90,7 @@ function parseGate(value: unknown, passIds: string[]): GateConfig {
   });
   const changes = raw.allowed_changes === undefined
     ? undefined
-    : parseAllowedChanges(raw.allowed_changes, passIds);
+    : parseAllowedChanges(raw.allowed_changes, passIds, unknownKeys);
   return {
     context,
     ...(appId !== undefined ? { app_id: appId } : {}),
@@ -99,18 +100,35 @@ function parseGate(value: unknown, passIds: string[]): GateConfig {
   };
 }
 
-function parseAllowedChanges(value: unknown, passIds: string[]): NonNullable<GateConfig["allowed_changes"]> {
+function parseAllowedChanges(value: unknown, passIds: string[], unknownKeys: string[]): NonNullable<GateConfig["allowed_changes"]> {
   const label = "config.gate.allowed_changes";
-  const raw = object(value, label);
-  const version = raw.version_only === undefined ? undefined : object(raw.version_only, `${label}.version_only`);
+  const raw = fields(value, label, unknownKeys, ["paths", "reread_pass", "version_only"]);
+  const version = raw.version_only === undefined ? undefined : fields(raw.version_only, `${label}.version_only`, unknownKeys, ["file", "tests", "pattern"]);
+  const pattern = optionalString(version?.pattern, `${label}.version_only.pattern`);
+  if (pattern !== undefined) {
+    try {
+      new RegExp(pattern);
+    } catch {
+      throw new Error(`${label}.version_only.pattern must be a regular expression`);
+    }
+  }
   return {
     paths: stringList(raw.paths, `${label}.paths`),
     reread_pass: configuredPass(raw.reread_pass, `${label}.reread_pass`, passIds),
     ...(version ? { version_only: {
       file: nonemptyString(version.file, `${label}.version_only.file`),
       tests: stringList(version.tests, `${label}.version_only.tests`),
+      ...(pattern === undefined ? {} : { pattern }),
     } } : {}),
   };
+}
+
+function fields(value: unknown, label: string, unknownKeys: string[], known: string[]): Record<string, unknown> {
+  const raw = object(value, label);
+  for (const key of Object.keys(raw)) {
+    if (!known.includes(key)) unknownKeys.push(`${label}.${key}`);
+  }
+  return raw;
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -136,9 +154,8 @@ function configuredPass(value: unknown, label: string, passIds: string[]): strin
   return value;
 }
 
-function parseVendor(name: string, value: unknown): VendorConfig {
-  if (!value || typeof value !== "object") throw new Error(`config.vendors.${name} is not an object`);
-  const raw = value as Record<string, unknown>;
+function parseVendor(name: string, value: unknown, unknownKeys: string[]): VendorConfig {
+  const raw = fields(value, `config.vendors.${name}`, unknownKeys, ["authors", "runtimes", "models", "efforts", "read_only_seat", "binary"]);
   const readOnly = optionalBoolean(raw.read_only_seat, `config.vendors.${name}.read_only_seat`);
   const binary = optionalString(raw.binary, `config.vendors.${name}.binary`);
   return {
@@ -171,11 +188,10 @@ function optionalSeatKind(value: unknown, label: string): SeatKind | undefined {
   return value as SeatKind;
 }
 
-function parseInstalls(value: unknown): InstallConfig[] {
+function parseInstalls(value: unknown, unknownKeys: string[]): InstallConfig[] {
   if (!Array.isArray(value) || value.length === 0) throw new Error("config.installs must list install directories");
   return value.map((entry, index) => {
-    if (!entry || typeof entry !== "object") throw new Error(`config.installs[${index}] is not an object`);
-    const raw = entry as Record<string, unknown>;
+    const raw = fields(entry, `config.installs[${index}]`, unknownKeys, ["dir", "lockfile"]);
     if (typeof raw.dir !== "string" || typeof raw.lockfile !== "string") {
       throw new Error(`config.installs[${index}] needs dir and lockfile`);
     }
@@ -183,9 +199,10 @@ function parseInstalls(value: unknown): InstallConfig[] {
   });
 }
 
-function parseHandoff(value: unknown): HandoffConfig {
-  if (!value || typeof value !== "object") throw new Error("config.handoff is not an object");
-  const raw = value as Record<string, unknown>;
+function parseHandoff(value: unknown, unknownKeys: string[]): HandoffConfig {
+  const raw = fields(value, "config.handoff", unknownKeys, [
+    "version_file", "changelog", "section_heading", "tag", "tag_message", "merge_message", "merge_command", "green",
+  ]);
   const stringField = (key: string) => {
     const field = raw[key];
     if (typeof field !== "string" || field.length === 0) throw new Error(`config.handoff.${key} must be a string`);
@@ -211,12 +228,8 @@ function stringList(value: unknown, label: string): string[] {
 }
 
 function stringMap(value: unknown, label: string): Record<string, string[]> {
-  if (!value || typeof value !== "object") throw new Error(`${label} must be an object`);
-  const out: Record<string, string[]> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = stringList(entry, `${label}.${key}`);
-  }
-  return out;
+  return Object.fromEntries(Object.entries(object(value, label))
+    .map(([key, entry]) => [key, stringList(entry, `${label}.${key}`)]));
 }
 
 export function vendorForRuntime(config: Config, runtime: string): { name: string; vendor: VendorConfig } | null {

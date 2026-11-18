@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../src/config.js";
 import { formatCheck, formatStatus } from "../src/format.js";
+import type { GhClient } from "../src/gh.js";
 import { loadReview } from "../src/load.js";
 import { buildCheck, buildStatus } from "../src/report.js";
 import type { SeatRecord } from "../src/types.js";
@@ -490,6 +491,18 @@ describe("v1.2 passes and re-reads", () => {
     expect(status).toContain(`head equals last output_sha ${B}`);
   });
 
+  it("accepts and names a same-range correction without changing sequence or a re-read's place", async () => {
+    const original = modern("cold", A, { model: { requested: "claude-fable-5-2", observed: "other" } });
+    const corrected = modern("cold", A);
+    const { check, status } = await verify([original, modern("finish", A), corrected], A);
+    expect(check).toBe("NOTICE record replacement pass cold comment 3 replaces comment 1 at the same SHAs\n");
+    expect(status).toContain("pass cold comment 3 replaces comment 1 at the same SHAs");
+    const reread = await verify([
+      corrected, modern("finish", A), modern("cold", B, { reread: true }), modern("cold", B),
+    ]);
+    expect(reread.check).toBe("NOTICE record replacement pass cold comment 4 replaces comment 3 at the same SHAs\n");
+  });
+
   it.each([
     { records: [modern("cold", B, { reread: true })], error: /requires an earlier record/ },
     { records: [modern("cold", A), modern("cold", A, { reread: true })], error: /requires a later output_sha/ },
@@ -500,6 +513,16 @@ describe("v1.2 passes and re-reads", () => {
     const { check } = await verify(records, C);
     expect(check).toMatch(error);
   });
+});
+
+it("refuses a pull request response with the wrong pull number before further reads", async () => {
+  const calls: string[] = [];
+  const gh: GhClient = { async get(path) {
+    calls.push(path);
+    return { number: 2, head: { sha: A }, base: { ref: "main", sha: A } };
+  } };
+  await expect(loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig())).rejects.toThrow(/returned pull request 2 for 1/);
+  expect(calls).toEqual(["/repos/BeniCheni/elenchus/pulls/1"]);
 });
 
 it("requires a matching model and effort to be listed in the vendor table", async () => {
