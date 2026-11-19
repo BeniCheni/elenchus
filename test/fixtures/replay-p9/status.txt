@@ -13,7 +13,7 @@ pass exec: recorded, executor, seat executor, output dcb914e, comment https://gi
 head equals last output_sha dcb914e
 gate: no status
 
-next: 3
-seat: Beni
-role: adjudication
-blocked: contested finding 6 needs a ruling in pass 3
+next: 2.5
+seat: PM
+role: synthesis
+blocked: authorize requires a schema v1.2 record
