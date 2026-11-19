@@ -380,17 +380,16 @@ it.each([["2.5", "high"], ["3", "high"], ["2.5", "blocking"], ["3", "blocking"]]
   },
 );
 
-it.each([[[]], [undefined]] as [string[] | undefined][])("refuses empty or missing carries (%j) while nonempty carries evaluate findings", async (carries) => {
+it("refuses empty carries while nonempty carries evaluate findings", async () => {
   const finding = { id: "F1", severity: "blocking", status: "open" as const };
   const allPasses = ["cold", "reply", "synthesis", "ruling"];
   const records = allPasses.map((pass) => record(pass, { findings: pass === "ruling" ? [] : [finding] }));
-  function setup(flow: string[] | undefined) {
+  function setup(flow: string[]) {
     return world({ allPasses, records, configure(config) {
-      if (!flow) Reflect.deleteProperty(config.finding_flow!, "carries");
-      else config.finding_flow!.carries = flow;
+      config.finding_flow!.carries = flow;
     } }).gh;
   }
-  expect(await authorize(setup(carries), repo, 1, { dryRun: true })).toMatchObject({
+  expect(await authorize(setup([]), repo, 1, { dryRun: true })).toMatchObject({
     ok: false, items: [expect.objectContaining({ rule: "config", message: expect.stringContaining("config.finding_flow.carries") })],
   });
   for (const flow of [["synthesis"], ["reply", "synthesis"]]) {
@@ -461,6 +460,121 @@ it("allows an early same-range synthesis correction to drop an ID it introduced"
   });
 });
 
+const rulingFinding = { id: "F9", severity: "blocking", status: "open" } as const;
+const replayPasses = ["0", "1", "1.5", "2", "2.5", "3", "exec"];
+
+function legacyRecord(pass: string, change: Partial<SeatRecord> = {}): SeatRecord {
+  const entry = record(pass, change);
+  delete entry.schema_version;
+  return entry;
+}
+
+it.each(["2.5", "3"] as const)("pass %s carries a legacy ID when its marked re-read returns to an older range", async (pass) => {
+  const atHead = { input_sha: rereadHead, output_sha: rereadHead };
+  const writing = { output_sha: rereadHead, commits: [rereadHead] };
+  const records = replayPasses.slice(0, 3).map((id) => record(id));
+  if (pass === "2.5") {
+    records.push(
+      legacyRecord("2", writing),
+      legacyRecord("2.5", { ...atHead, findings: [rulingFinding] }),
+      legacyRecord("2"),
+      legacyRecord("2.5"),
+      record("2.5", { ...atHead, reread: true }),
+      record("3", atHead),
+    );
+  } else {
+    records.push(
+      record("2"),
+      record("2.5"),
+      legacyRecord("3", { ...writing, findings: [rulingFinding] }),
+      legacyRecord("3"),
+      record("3", { ...writing, reread: true }),
+    );
+  }
+  records.push(record("exec", atHead));
+  const { gh } = world({
+    records, allPasses: replayPasses, boundary: "2.5", head: rereadHead, changedPath: "docs/notes.md",
+    configure(config) { config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" }; },
+  });
+  const carry = expect.objectContaining({
+    severity: "fail", rule: "finding-carry", pass, finding: "F9",
+    message: expect.stringContaining(`record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${pass === "2.5" ? 5 : 6}`),
+  });
+  const check = buildCheck(await loadReview(gh, repo, 1));
+  expect(check.filter(({ severity }) => severity === "fail")).toEqual([carry]);
+  const result = await authorize(gh, repo, 1, { dryRun: true });
+  expect(result).toMatchObject({ ok: false });
+  expect(result.items.filter(({ severity }) => severity === "fail")).toEqual([carry]);
+});
+
+it.each(["synthesis", "ruling"])("defers the whole replacement chain for the standing %s", async (pass) => {
+  const records = fullPasses.flatMap((id) => id === pass
+    ? [record(id, { findings: [rulingFinding] }), record(id, { findings: [{ ...rulingFinding, id: "F10" }] }), record(id)]
+    : [record(id)]);
+  const { gh } = world({ records, allPasses: fullPasses });
+  const result = await authorize(gh, repo, 1, { dryRun: true });
+  expect(result).toMatchObject({ ok: true, posted: false });
+  expect(result.items.map(({ rule }) => rule)).toEqual(["record replacement", "record replacement"]);
+});
+
+function rulingReread(findings: SeatRecord["findings"], executorWrites: boolean, introducedByCorrection = false) {
+  const records = [
+    ...fullPasses.slice(0, 5).map((pass) => record(pass)),
+    ...(introducedByCorrection ? [record("ruling")] : []),
+    record("ruling", { findings: [rulingFinding] }),
+  ];
+  if (executorWrites) records.push(record("exec", { output_sha: rereadHead, commits: [rereadHead] }));
+  records.push(record("ruling", { reread: true, input_sha: rereadHead, output_sha: rereadHead, findings }));
+  if (!executorWrites) records.push(record("exec", { input_sha: rereadHead, output_sha: rereadHead }));
+  return world({ allPasses: fullPasses, boundary: "synthesis", head: rereadHead, changedPath: "docs/notes.md", records });
+}
+
+it.each([
+  { scenario: "RR1 executor docs commit", executorWrites: true, findings: [] },
+  { scenario: "RR2 executor docs commit and another ID fixed", executorWrites: true, findings: [{ id: "F1", severity: "note", status: "fixed" as const }] },
+  { scenario: "RR6 unrecorded docs push", executorWrites: false, findings: [] },
+])("$scenario requires the ruling re-read to carry F9", async ({ executorWrites, findings }) => {
+  const { gh } = rulingReread(findings, executorWrites);
+  const carry = {
+    rule: "finding-carry", pass: "ruling", finding: "F9",
+    message: "finding F9 from pass ruling record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6 is missing",
+  };
+  const state = await loadReview(gh, repo, 1);
+  expect(buildCheck(state).filter(({ rule }) => rule === "finding-carry")).toEqual([expect.objectContaining(carry)]);
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({ ok: false, items: expect.arrayContaining([expect.objectContaining(carry)]) });
+  expect(buildStatus(state).next).toMatchObject({ step: "authorize", blocked: "authorization required" });
+});
+
+it("carries ruling IDs named in a correction to an earlier round", async () => {
+  const { gh } = rulingReread([], true, true);
+  const check = buildCheck(await loadReview(gh, repo, 1));
+  expect(check.filter(({ rule }) => rule === "finding-carry")).toEqual([
+    expect.objectContaining({ pass: "ruling", finding: "F9", message: expect.stringContaining("issuecomment-7") }),
+  ]);
+});
+
+it.each([
+  ["RR3 refuses", "open", false],
+  ["RR4 admits", "killed", true],
+] as const)("%s a ruling re-read with F9 %s", async (_scenario, status, ok) => {
+  const { gh } = rulingReread([{ ...rulingFinding, status }], true);
+  const result = await authorize(gh, repo, 1, { dryRun: true });
+  expect(result.ok).toBe(ok);
+  expect(result.items.filter(({ rule }) => rule === "finding-carry")).toEqual([]);
+  expect(result.items.filter(({ rule }) => rule === "ruling")).toEqual(ok ? [] : [expect.objectContaining({ finding: "F9" })]);
+});
+
+it("RR5 admits a same-range ruling correction before the executor", async () => {
+  const records = [
+    ...fullPasses.slice(0, 5).map((pass) => record(pass)),
+    record("ruling", { findings: [rulingFinding] }), record("ruling"), record("exec"),
+  ];
+  const { gh } = world({ allPasses: fullPasses, records });
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: true, posted: false, items: [expect.objectContaining({ rule: "record replacement" })],
+  });
+});
+
 it("A16b carries F31 without a carry failure and requires a fresh ruling even after it is fixed", async () => {
   const finding = { id: "F31", severity: "blocking", status: "open" as const };
   const records = [
@@ -500,6 +614,47 @@ it("names the missing ruling for a settled synthesis even before an executor exi
   expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step: "ruling", blocked: message });
   expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
     ok: false, items: expect.arrayContaining([expect.objectContaining({ rule: "ruling", pass: "ruling", message })]),
+  });
+});
+
+it.each([
+  { scenario: "E7 legacy ruling", legacy: "3", stale: false },
+  { scenario: "E7b legacy synthesis", legacy: "2.5", stale: false },
+  { scenario: "legacy synthesis with a stale ruling", legacy: "2.5", stale: true },
+])("routes $scenario to the pass needing a schema v1.2 record", async ({ legacy, stale }) => {
+  const records = replayPasses.map((pass) => pass === legacy ? legacyRecord(pass) : record(pass));
+  if (stale) [records[4], records[5]] = [records[5]!, records[4]!];
+  const { gh } = world({ records, allPasses: replayPasses, configure(config) {
+    config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
+  } });
+  const message = "authorize requires a schema v1.2 record";
+  const result = await authorize(gh, repo, 1, { dryRun: true });
+  expect(result).toMatchObject({
+    ok: false, items: expect.arrayContaining([expect.objectContaining({ rule: "schema", pass: legacy, message })]),
+  });
+  if (stale) expect(result.items.some(({ rule, message }) => rule === "ruling" && message.includes("precedes the standing synthesis"))).toBe(true);
+  const state = await loadReview(gh, repo, 1, undefined, { ranges: false });
+  expect(buildStatus(state).next).toMatchObject({ step: legacy, blocked: message });
+});
+
+it("routes an open blocking finding named only by the synthesis to the ruling", async () => {
+  const records = fullPasses.map((pass) => record(pass, { findings: pass === "synthesis" ? [rulingFinding] : [] }));
+  const { gh } = world({ records, allPasses: fullPasses });
+  const message = "blocking finding F9 must be fixed or killed (status: open)";
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: [expect.objectContaining({ rule: "ruling", pass: "synthesis", message })],
+  });
+  const state = await loadReview(gh, repo, 1, undefined, { ranges: false });
+  expect(buildStatus(state).next).toMatchObject({ step: "ruling", blocked: message });
+});
+
+it("keeps retry handling for a rejected ruling record", async () => {
+  const records = fullPasses.slice(0, 6).map((pass) => record(pass));
+  records[5]!.findings = [{ id: "F9", severity: "high", status: "open" }];
+  const { gh } = world({ records, allPasses: fullPasses });
+  const state = await loadReview(gh, repo, 1, undefined, { ranges: false });
+  expect(buildStatus(state).next).toMatchObject({
+    step: "ruling", blocked: "record rejected after 1 failed attempt(s); back to the seat",
   });
 });
 

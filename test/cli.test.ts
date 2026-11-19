@@ -104,7 +104,10 @@ function checkedComments(comments: unknown[]) {
   });
 }
 
-function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCoverage?: boolean; correction?: boolean; changed?: boolean; omitRuling?: boolean } = {}) {
+function authorizeCli(options: {
+  red?: boolean; incomplete?: boolean; omitCoverage?: boolean; correction?: boolean; changed?: boolean;
+  omitRuling?: boolean; omitCarries?: boolean; command?: "status" | "check" | "authorize";
+} = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "elenchus-cli-authorize-"));
   const fixtures = path.join(dir, "fixtures");
   mkdirSync(fixtures);
@@ -120,6 +123,7 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
     { id: "ruling", role: "ruling", seat: "maintainer" },
   ];
   baseConfig.finding_flow = { opens: "0", carries: ["synthesis"], ...(options.omitRuling ? {} : { ruling: "ruling" }) };
+  if (options.omitCarries) Reflect.deleteProperty(baseConfig.finding_flow, "carries");
   baseConfig.gate!.allowed_changes!.reread_pass = "0";
   baseConfig.gate!.app_id = 459;
   write("/repos/BeniCheni/elenchus/pulls/1", { number: 1, state: "open", head: { sha: head }, base: { sha, ref: "trunk" } });
@@ -154,10 +158,18 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
     });
   }
   const bin = fakeGh(dir);
-  return run(["authorize", "BeniCheni/elenchus#1", "--dry-run"], {
+  const command = options.command ?? "authorize";
+  return run([command, "BeniCheni/elenchus#1", ...(command === "authorize" ? ["--dry-run"] : [])], {
     PATH: `${bin}:${process.env.PATH ?? ""}`, FIXTURE_DIR: fixtures,
   });
 }
+
+it.each(["status", "check", "authorize"] as const)("%s stops at configuration load when carries is missing", (command) => {
+  const result = authorizeCli({ command, omitCarries: true });
+  expect(result.status, result.stderr).toBe(2);
+  expect(result.stderr).toContain("config.finding_flow.carries must be a list of strings");
+  expect(result.stdout).toBe("");
+});
 
 it("runs authorize dry-run through dist/cli.js in the repository", () => {
   const result = authorizeCli();

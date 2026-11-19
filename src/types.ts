@@ -205,6 +205,7 @@ export type RecordedPosting = {
   commentUrl: string;
   createdAt: string;
   id: number;
+  replaces?: number;
 };
 
 export type PassOutcome =

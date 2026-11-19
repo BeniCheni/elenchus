@@ -118,7 +118,7 @@ that admitted each qualifying commit after the review.
 | `authors` | The record's runtime is a configured vendor, and its commits carry that vendor's identity. |
 | `posted_by` | The record's `posted_by` is the comment's author. |
 | `retries` | A rejected record goes back to its seat, and is escalated to a person past `retry_cap` failed attempts; a record's `retries` matches the failures its comments show. |
-| `finding-carry` | Each carrying pass repeats the opener's IDs. The standing synthesis also carries IDs from earlier synthesis rounds and ruling records posted before it. |
+| `finding-carry` | Each carrying pass repeats the opener's IDs. The standing synthesis also carries IDs from earlier synthesis rounds and ruling records posted before it. The standing ruling carries IDs from earlier ruling rounds posted after the standing synthesis. Each carrier's standing record and the chain of records it replaces are one round. |
 | `coverage` | For passes marked `coverage`, the record accounts for every path in the diff. Named reviewed paths must match the manifest without gaps or overlap. |
 | `head` | Commits after the last review fall within the configured allowed set or need a re-read. |
 | `ci` | When the head has moved past the reviewed boundary, each configured check is successful at that head and comes from its required App when pinned. |
@@ -130,8 +130,11 @@ posted after it. The historical v1.1 replay records on PR 1 therefore fail autho
 Schema v1.2 accepts `blocking`, `should-fix` and `note`. A finding blocking in either
 record needs an effective status of `fixed` or `killed`. The ruling supplies the status
 when it names the ID. Otherwise the synthesis supplies it. Other contested findings need
-a status other than `contested`. `status` sends the review to the ruling pass when the
-ruling is missing, stale or leaves findings unsettled. A same-SHA replacement under schema
+a status other than `contested`. `status` names the pass that needs a v1.2 record when
+authorization refuses a record for its schema. It sends the review to the ruling pass when
+the ruling is missing, stale or leaves findings unsettled. `status` makes no head compare,
+so a re-read that `check` requires comes before the pass `status` names.
+A same-SHA replacement under schema
 v1.2 must precede any standing
 record from a later configured pass. `authorize` reports accepted replacements with both
 comment IDs. Seats follow the roster's vendor separation as a human review rule.

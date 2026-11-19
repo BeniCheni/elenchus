@@ -14,6 +14,14 @@ describe("repository policy configuration", () => {
     expect(parseConfig(raw)).toEqual(raw);
   });
 
+  it("rejects a missing config.finding_flow.carries and parses an empty list", () => {
+    const config = kickoffConfig();
+    const { carries: _carries, ...withoutCarries } = config.finding_flow!;
+    expect(() => parseConfig({ ...config, finding_flow: withoutCarries }))
+      .toThrow("config.finding_flow.carries must be a list of strings");
+    expect(parseConfig({ ...config, finding_flow: { ...withoutCarries, carries: [] } }).finding_flow?.carries).toEqual([]);
+  });
+
   it.each([
     { passes: [{ id: "", role: "r", seat: "s" }] },
     { passes: [{ id: "same", role: "r", seat: "s" }, { id: "same", role: "r", seat: "s" }] },

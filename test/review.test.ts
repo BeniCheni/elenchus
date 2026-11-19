@@ -327,7 +327,8 @@ describe("attribution", () => {
       comment(20, body, "2026-11-14T00:01:00Z"),
     ]);
     expect(status).toContain("pass 0: recorded");
-    expect(status).toContain("next: authorize");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(status).not.toContain("rejected");
     expect(check).toContain(`NOTICE extraction ${url(20)} json block is not a seat record`);
     expect(check).not.toMatch(/FAIL /);
@@ -362,7 +363,8 @@ describe("attribution", () => {
       comment(30, fenced(stray), "2026-11-14T00:02:00Z"),
     ]);
     expect(status).toContain("pass exec: recorded");
-    expect(status).toContain("next: authorize");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(status).toContain(`unreadable pass: ${url(30)}`);
     expect(check).toContain(`FAIL schema ${url(30)}`);
     expect(check).not.toMatch(/FAIL sequence/);
@@ -393,8 +395,9 @@ describe("record authors", () => {
       ...recorded("3"),
       comment(12, fenced(seat({ pass: "exec", posted_by: "BeniCheni" })), "2026-11-14T00:00:12Z", "mallory"),
     ]);
-    expect(status).toContain("next: exec");
-    expect(status).not.toContain("next: authorize");
+    expect(status).toContain("pass exec: not recorded");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(check).toContain(`NOTICE record_authors ${url(12)} comment by mallory ignored for records`);
     expect(check).not.toMatch(/FAIL /);
   });
@@ -407,7 +410,8 @@ describe("record authors", () => {
       comment(22, bad, "2026-11-14T00:00:22Z", "mallory"),
       comment(23, bad, "2026-11-14T00:00:23Z", "mallory"),
     ]);
-    expect(status).toContain("next: authorize");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(status).not.toContain("escalate to Beni");
     expect(check.match(/NOTICE record_authors /g)?.length).toBe(3);
     expect(check).not.toMatch(/FAIL /);

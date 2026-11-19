@@ -311,7 +311,7 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
   };
 }
 
-function recordHistory(valid: (RecordedPosting & Pick<Attempt, "replaces">)[]): RecordedPosting[] {
+function recordHistory(valid: RecordedPosting[]): RecordedPosting[] {
   // A correction has the same SHA range and keeps the original posting slot.
   // Use the actual standing comment in the outcome for findings and ruling order.
   const timeline = valid.filter(({ replaces }) => replaces === undefined);

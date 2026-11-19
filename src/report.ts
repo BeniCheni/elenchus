@@ -7,6 +7,7 @@ import type {
   Config,
   Observed,
   PassState,
+  RecordedPosting,
   ReviewState,
   SeatRecord,
   StatusView,
@@ -62,11 +63,13 @@ function commentOf(pass: PassState): string | null {
 
 function nextStep(state: ReviewState, firstOpen: PassState | undefined): StatusView["next"] {
   const ruling = checkRuling(state);
-  const reason = ruling?.findings[0]?.message;
-  if (ruling && reason && (!firstOpen || state.passes.indexOf(firstOpen) > state.passes.indexOf(ruling.pass)
-      || (firstOpen === ruling.pass && firstOpen.outcome.kind === "absent"))) {
-    const { id, seat, role } = ruling.pass;
-    return { step: id, seat, role, blocked: reason, options: null };
+  // Schema items are in configured order. A finding always needs the ruling seat.
+  const schema = ruling?.schema[0];
+  const issue = schema ?? ruling?.findings[0];
+  const pass = schema ? state.passes.find(({ id }) => id === schema.pass) : ruling?.pass;
+  if (issue && pass && pass.outcome.kind !== "rejected") {
+    const { id, seat, role } = pass;
+    return { step: id, seat, role, blocked: issue.message, options: null };
   }
   if (!firstOpen) {
     return {
@@ -334,19 +337,44 @@ function checkFindings(state: ReviewState, items: CheckItem[]): void {
   const synthesis = state.passes.find(({ id }) => id === flow.carries.at(-1))?.outcome;
   if (synthesis?.kind !== "recorded") return;
   const ruling = state.passes.find(({ id }) => id === flow.ruling)?.outcome;
-  const have = new Set([...opened, ...synthesis.record.findings.map(({ id }) => id)]);
-  // Same-range corrections keep their existing rules. A re-read carries the prior round's IDs.
-  const earlierSyntheses = synthesis.postings.filter(({ record }) =>
-    !sameSha(record.input_sha, synthesis.record.input_sha) || !sameSha(record.output_sha, synthesis.record.output_sha),
-  );
-  for (const posting of [...earlierSyntheses, ...(ruling?.kind === "recorded" ? ruling.postings : [])]) {
-    if (postingOrder(posting, synthesis.posting) >= 0) continue;
+  const rulings = ruling?.kind === "recorded" ? ruling.postings : [];
+  const earlierSyntheses = earlierRounds(synthesis.postings, synthesis.posting);
+  const beforeSynthesis = [...earlierSyntheses, ...rulings].filter((posting) => postingOrder(posting, synthesis.posting) < 0);
+  checkCarriedFindings(items, synthesis.posting, beforeSynthesis, opened);
+
+  if (ruling?.kind === "recorded") {
+    // Since the standing ruling is the last posting, this window is empty when it is stale.
+    const afterSynthesis = earlierRounds(rulings, ruling.posting).filter((posting) =>
+      postingOrder(posting, synthesis.posting) > 0,
+    );
+    checkCarriedFindings(items, ruling.posting, afterSynthesis);
+  }
+}
+
+function earlierRounds(postings: RecordedPosting[], standing: RecordedPosting): RecordedPosting[] {
+  const earlier: RecordedPosting[] = [];
+  let replacedId: number | undefined = standing.id;
+  for (const posting of [...postings].reverse()) {
+    if (posting.id === replacedId) replacedId = posting.replaces;
+    else earlier.push(posting);
+  }
+  return earlier.reverse();
+}
+
+function checkCarriedFindings(
+  items: CheckItem[],
+  carrier: RecordedPosting,
+  priorPostings: RecordedPosting[],
+  alreadyReported: string[] = [],
+): void {
+  const have = new Set([...alreadyReported, ...carrier.record.findings.map(({ id }) => id)]);
+  for (const posting of priorPostings) {
     for (const { id } of posting.record.findings) {
       if (have.has(id)) continue;
       have.add(id);
       items.push({
-        severity: "fail", rule: "finding-carry", pass: synthesis.record.pass, finding: id,
-        comment: synthesis.commentUrl,
+        severity: "fail", rule: "finding-carry", pass: carrier.record.pass, finding: id,
+        comment: carrier.commentUrl,
         message: `finding ${id} from pass ${posting.record.pass} record ${posting.commentUrl} is missing`,
       });
     }
