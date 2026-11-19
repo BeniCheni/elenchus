@@ -27,8 +27,7 @@ describe("captured replay at P9", () => {
     const state = await loadReview(gh, "BeniCheni/elenchus", 1, undefined, { gateStatus: true });
     const status = formatStatus(buildStatus(state));
     const check = formatCheck([...buildCheck(state), ...await checkHead(gh, state)]);
-    const capturedStatus = readFileSync(path.join(dir, "status.txt"), "utf8");
-    expect(status.split("\nnext:")[0]).toBe(capturedStatus.split("\nnext:")[0]);
+    expect(status).toBe(readFileSync(path.join(dir, "status.txt"), "utf8"));
     expect(check).toBe(readFileSync(path.join(dir, "check.txt"), "utf8"));
     expect(check.match(/^FAIL head \w{7}/gm)).toEqual(["FAIL head 217189c", "FAIL head 188b909"]);
     expect(check.match(/^NOTICE head \w{7}/gm)).toEqual(["NOTICE head 8ea93e2", "NOTICE head 7b7da6b", "NOTICE head dcb914e"]);
