@@ -621,7 +621,7 @@ it("carries findings across repository-defined pass ids", async () => {
   const gh = graphGh({
     head: A, baseSha: A, nodes,
     comments: [
-      comment(1, fenced(seat({ schema_version: "1.2", pass: "discover", findings: [{ id: "F9", severity: "low", status: "open" }] })), "2026-11-14T00:00:01Z"),
+      comment(1, fenced(seat({ schema_version: "1.2", pass: "discover", findings: [{ id: "F9", severity: "note", status: "open" }] })), "2026-11-14T00:00:01Z"),
       comment(2, fenced(seat({ schema_version: "1.2", pass: "respond", findings: [] })), "2026-11-14T00:00:02Z"),
     ],
   });

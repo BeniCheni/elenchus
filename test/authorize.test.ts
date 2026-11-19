@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { AppStatusClient } from "../src/app-status.js";
 import { authorize } from "../src/authorize.js";
 import type { GhClient } from "../src/gh.js";
+import { loadReview } from "../src/load.js";
+import { buildCheck, buildStatus } from "../src/report.js";
 import type { Config, SeatRecord } from "../src/types.js";
 import { comment, fenced, kickoffConfig } from "./graph.js";
 
@@ -41,13 +43,11 @@ function world(options: {
   configure?: (config: Config) => void;
 } = {}) {
   const configured = kickoffConfig();
-  const allPasses = options.allPasses ?? ["cold", "ruling"];
+  const allPasses = options.allPasses ?? ["cold", "synthesis", "ruling"];
   configured.passes = allPasses.map((id) => ({
     id, role: id, seat: id, ...(options.covered ? { coverage: true } : {}),
   }));
-  if (allPasses.includes("synthesis")) {
-    configured.finding_flow = { opens: "cold", carries: ["reply", "synthesis"], ruling: "ruling" };
-  } else configured.finding_flow = { opens: allPasses[0]!, carries: [], ruling: allPasses.at(-1)! };
+  configured.finding_flow = { opens: "cold", carries: ["reply", "synthesis"].filter((id) => allPasses.includes(id)), ruling: "ruling" };
   const gate = configured.gate!;
   gate.allowed_changes!.reread_pass = options.boundary ?? allPasses[0]!;
   gate.app_id = options.configAppId ?? appId;
@@ -57,7 +57,7 @@ function world(options: {
   const baseSha = options.changedPath ? sha : head;
   const pull = { number: 1, state: options.state ?? "open", head: { sha: head }, base: { ref: "trunk", sha: baseSha } };
   const comments = (options.records ?? allPasses.map((pass) => record(pass))).map((entry, i) =>
-    comment(i + 1, fenced(entry), `2026-11-14T00:00:0${i}Z`),
+    comment(i + 1, fenced(entry), `2026-11-14T00:00:${String(i).padStart(2, "0")}Z`),
   );
   const calls: string[] = [];
   const gh: GhClient = {
@@ -230,7 +230,7 @@ describe("authorize with its real App client", () => {
 
   it("T5 names the contested finding until the ruling is recorded", async () => {
     const allPasses = ["cold", "reply", "synthesis", "ruling"];
-    const findings = ["F7", "F8"].map((id) => ({ id, severity: "high", status: "contested" as const }));
+    const findings = ["F7", "F8"].map((id) => ({ id, severity: "should-fix", status: "contested" as const }));
     const records = [
       record("cold", { findings: findings.map((finding) => ({ ...finding, status: "open" })) }),
       record("reply", { findings }),
@@ -255,7 +255,7 @@ describe("authorize with its real App client", () => {
   it("requires the ruling to follow the standing synthesis re-read", async () => {
     const head = "b".repeat(40);
     const allPasses = ["cold", "reply", "synthesis", "ruling"];
-    const finding = { id: "F7", severity: "high", status: "contested" as const };
+    const finding = { id: "F7", severity: "note", status: "contested" as const };
     const records = [
       record("cold", { findings: [finding] }), record("reply", { findings: [finding] }),
       record("synthesis", { findings: [finding] }),
@@ -280,10 +280,16 @@ it("authorizes an allowed docs commit without counting its classification notice
 it("refuses a matching abbreviated legacy boundary output SHA without touching the App client", async () => {
   const head = `abc1234${"0".repeat(33)}`;
   const short = head.slice(0, 7);
-  const allPasses = ["1", "3"];
-  const records = [record("1", { input_sha: short, output_sha: short }), record("3", { input_sha: head, output_sha: head })];
+  const allPasses = ["1", "synthesis", "3"];
+  const records = [
+    record("1", { input_sha: short, output_sha: short }),
+    ...allPasses.slice(1).map((pass) => record(pass, { input_sha: head, output_sha: head })),
+  ];
   delete records[0]!.schema_version;
-  const result = await authorize(world({ head, allPasses, records }).gh, repo, 1, { dryRun: true });
+  const { gh } = world({ head, allPasses, records, configure: (config) => {
+    config.finding_flow = { opens: "1", carries: ["synthesis"], ruling: "3" };
+  } });
+  const result = await authorize(gh, repo, 1, { dryRun: true });
   expect(result).toMatchObject({ ok: false, items: [expect.objectContaining({
     rule: "head", message: expect.stringContaining("output_sha abc1234 must be a full 40-digit SHA"),
   })] });
@@ -309,12 +315,15 @@ it.each(["configured last", "chronologically latest"])("reports a short output o
   const short = sha.slice(0, 7);
   const legacy = record(caseName === "configured last" ? "exec" : "3", { input_sha: short, output_sha: short });
   delete legacy.schema_version;
-  const allPasses = ["cold", "3", "exec"];
+  const allPasses = ["cold", "synthesis", "3", "exec"];
   const head = caseName === "configured last" ? "b".repeat(40) : sha;
   const records = caseName === "configured last"
-    ? [record("cold"), record("3"), legacy, record("3", { reread: true, input_sha: head, output_sha: head })]
-    : [record("cold"), record("exec"), legacy];
-  const result = await authorize(world({ allPasses, records, head, changedPath: "docs/notes.md" }).gh, repo, 1, { dryRun: true });
+    ? [record("cold"), record("synthesis"), record("3"), legacy, record("3", { reread: true, input_sha: head, output_sha: head })]
+    : [record("cold"), record("synthesis"), record("exec"), legacy];
+  const { gh } = world({ allPasses, records, head, changedPath: "docs/notes.md", configure: (config) => {
+    config.finding_flow!.ruling = "3";
+  } });
+  const result = await authorize(gh, repo, 1, { dryRun: true });
   expect(result).toMatchObject({ ok: false, items: expect.arrayContaining([
     expect.objectContaining({ rule: "head", message: `output_sha ${short} must be a full 40-digit SHA for authorize` }),
   ]) });
@@ -325,6 +334,8 @@ it.each([
   ["blocking", "contested", "blocking", "fixed", true],
   ["blocking", "contested", "blocking", "killed", true],
   ["blocking", "contested", "note", "open", false],
+  ["blocking", "contested", "note", "fixed", true],
+  ["blocking", "open", "note", "open", false],
   ["note", "contested", "note", "open", true],
   ["blocking", "open", null, null, false],
   ["blocking", "open", "blocking", "killed", true],
@@ -340,6 +351,178 @@ it.each([
   const result = await authorize(world({ allPasses, records }).gh, repo, 1, { dryRun: true });
   expect(result.ok).toBe(ok);
   expect(result.items).toEqual(ok ? [] : [expect.objectContaining({ rule: "ruling", finding: "F1" })]);
+});
+
+it("refuses an open blocking ID introduced only by an on-time ruling (A15)", async () => {
+  const records = [
+    record("cold"), record("synthesis"),
+    record("ruling", { findings: [{ id: "F9", severity: "blocking", status: "open" }] }),
+  ];
+  const { gh } = world({ records });
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: [expect.objectContaining({ rule: "ruling", pass: "ruling", finding: "F9" })],
+  });
+});
+
+it.each([["2.5", "high"], ["3", "high"], ["2.5", "blocking"], ["3", "blocking"]])(
+  "refuses a v1.1 pass %s with full SHAs for its schema (severity %s)", async (pass, severity) => {
+  const allPasses = ["1", "2.5", "3"];
+  const records = allPasses.map((id) => record(id));
+  const legacy = records.find((entry) => entry.pass === pass)!;
+  delete legacy.schema_version;
+  legacy.findings = [{ id: "F1", severity, status: "open" }];
+  const { gh } = world({ allPasses, records, configure(config) {
+    config.finding_flow = { opens: "1", carries: ["2.5"], ruling: "3" };
+  } });
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: [expect.objectContaining({ rule: "schema", pass, message: expect.stringContaining("requires a schema v1.2") })],
+  });
+  },
+);
+
+it.each([[[]], [undefined]] as [string[] | undefined][])("refuses empty or missing carries (%j) while nonempty carries evaluate findings", async (carries) => {
+  const finding = { id: "F1", severity: "blocking", status: "open" as const };
+  const allPasses = ["cold", "reply", "synthesis", "ruling"];
+  const records = allPasses.map((pass) => record(pass, { findings: pass === "ruling" ? [] : [finding] }));
+  function setup(flow: string[] | undefined) {
+    return world({ allPasses, records, configure(config) {
+      if (!flow) Reflect.deleteProperty(config.finding_flow!, "carries");
+      else config.finding_flow!.carries = flow;
+    } }).gh;
+  }
+  expect(await authorize(setup(carries), repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: [expect.objectContaining({ rule: "config", message: expect.stringContaining("config.finding_flow.carries") })],
+  });
+  for (const flow of [["synthesis"], ["reply", "synthesis"]]) {
+    expect(await authorize(setup(flow), repo, 1, { dryRun: true })).toMatchObject({
+      ok: false, items: [expect.objectContaining({ rule: "ruling", finding: "F1" })],
+    });
+  }
+});
+
+it.each([
+  ["A16", "F31", false, true],
+  ["A17", "F7", true, true],
+  ["A17b", "F7", true, false],
+] as const)("%s requires an ID named before the synthesis re-read", async (_case, id, introducedBySynthesis, namedInRuling) => {
+  const finding = { id, severity: "blocking", status: "open" as const };
+  const records = [
+    ...fullPasses.slice(0, 4).map((pass) => record(pass)),
+    record("synthesis", { findings: introducedBySynthesis ? [finding] : [] }),
+    record("ruling", { findings: namedInRuling ? [finding] : [] }),
+  ];
+  const { gh } = rereadReview(records, []);
+  const expected = expect.objectContaining({
+    rule: "finding-carry", pass: "synthesis", finding: id,
+    message: expect.stringContaining(`record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${introducedBySynthesis ? 5 : 6}`),
+  });
+  expect(buildCheck(await loadReview(gh, repo, 1))).toContainEqual(expected);
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: expect.arrayContaining([expected]),
+  });
+  const fresh = rereadReview(records, [], { freshRuling: true });
+  expect(await authorize(fresh.gh, repo, 1, { dryRun: true })).toMatchObject({ ok: false, items: [expected] });
+});
+
+const rereadHead = "b".repeat(40);
+
+function rereadReview(records: SeatRecord[], findings: SeatRecord["findings"], options: { freshRuling?: boolean; executor?: boolean } = {}) {
+  const executor = options.executor ?? true;
+  return world({
+    allPasses: fullPasses, boundary: "synthesis", head: rereadHead, changedPath: "docs/notes.md",
+    records: [
+      ...records,
+      record("synthesis", { reread: true, input_sha: rereadHead, output_sha: rereadHead, findings }),
+      ...(options.freshRuling ? [record("ruling", { reread: true, input_sha: rereadHead, output_sha: rereadHead })] : []),
+      ...(executor ? [record("exec", { input_sha: rereadHead, output_sha: rereadHead })] : []),
+    ],
+  });
+}
+
+const stale = expect.objectContaining({
+  rule: "ruling", pass: "ruling",
+  message: expect.stringMatching(/issuecomment-6 precedes the standing synthesis .*issuecomment-7/),
+});
+
+it("carries IDs named in an accepted correction once the synthesis re-reads", async () => {
+  const finding = { id: "F32", severity: "note", status: "open" as const };
+  const earlier = fullPasses.slice(0, 5).map((pass) => record(pass));
+  const { gh } = rereadReview([...earlier, record("synthesis", { findings: [finding] }), record("ruling")], []);
+  const carry = buildCheck(await loadReview(gh, repo, 1)).filter(({ rule }) => rule === "finding-carry");
+  expect(carry).toEqual([expect.objectContaining({ finding: "F32", message: expect.stringContaining("issuecomment-6") })]);
+});
+
+it("allows an early same-range synthesis correction to drop an ID it introduced", async () => {
+  const finding = { id: "F32", severity: "note", status: "open" as const };
+  const records = [record("cold"), record("synthesis", { findings: [finding] }), record("synthesis"), record("ruling")];
+  const { gh } = world({ records });
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: true, items: [expect.objectContaining({ rule: "record replacement" })],
+  });
+});
+
+it("A16b carries F31 without a carry failure and requires a fresh ruling even after it is fixed", async () => {
+  const finding = { id: "F31", severity: "blocking", status: "open" as const };
+  const records = [
+    ...fullPasses.slice(0, 5).map((pass) => record(pass)),
+    record("ruling", { findings: [finding] }),
+  ];
+  const fixed = [{ ...finding, status: "fixed" as const }];
+  const open = rereadReview(records, [finding]);
+  expect(await authorize(open.gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: [stale, expect.objectContaining({ rule: "ruling", finding: "F31", message: expect.stringContaining("must be fixed or killed") })],
+  });
+  const staleButFixed = rereadReview(records, fixed);
+  expect(buildCheck(await loadReview(staleButFixed.gh, repo, 1))).toEqual(expect.not.arrayContaining([expect.objectContaining({ rule: "finding-carry" })]));
+  expect(await authorize(staleButFixed.gh, repo, 1, { dryRun: true })).toMatchObject({ ok: false, items: [stale] });
+  const fresh = rereadReview(records, fixed, { freshRuling: true });
+  expect(await authorize(fresh.gh, repo, 1, { dryRun: true })).toMatchObject({ ok: true, posted: false, items: [] });
+});
+
+it("routes a settled synthesis re-read to Pass 3 until its ruling is current", async () => {
+  const records = fullPasses.slice(0, 6).map((pass) => record(pass));
+  const pending = rereadReview(records, [], { executor: false });
+  const step = async (gh: GhClient) => buildStatus(await loadReview(gh, repo, 1, undefined, { ranges: false })).next;
+  expect(await step(pending.gh)).toMatchObject({ step: "ruling", blocked: expect.stringContaining("precedes the standing synthesis") });
+  const recorded = rereadReview(records, []);
+  expect(await step(recorded.gh)).toMatchObject({ step: "ruling" });
+  expect(await authorize(recorded.gh, repo, 1, { dryRun: true })).toMatchObject({ ok: false, items: [stale] });
+  const fresh = rereadReview(records, [], { freshRuling: true, executor: false });
+  expect(await step(fresh.gh)).toMatchObject({ step: "exec" });
+  const complete = rereadReview(records, [], { freshRuling: true });
+  expect(await step(complete.gh)).toMatchObject({ step: "authorize" });
+  expect(await authorize(complete.gh, repo, 1, { dryRun: true })).toMatchObject({ ok: true, posted: false, items: [] });
+});
+
+it("names the missing ruling for a settled synthesis even before an executor exists", async () => {
+  const { gh } = world({ allPasses: fullPasses, records: fullPasses.slice(0, 5).map((pass) => record(pass)) });
+  const message = expect.stringContaining("no valid ruling follows the standing synthesis");
+  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step: "ruling", blocked: message });
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: expect.arrayContaining([expect.objectContaining({ rule: "ruling", pass: "ruling", message })]),
+  });
+});
+
+it.each(["contested", "omitted", "open"] as const)("routes F7 when a later ruling leaves its status %s", async (status) => {
+  const finding = { id: "F7", severity: "note", status: "contested" as const };
+  const records = [
+    ...fullPasses.slice(0, 4).map((pass) => record(pass)),
+    record("synthesis", { findings: [finding] }),
+    record("ruling", { findings: status === "omitted" ? [] : [{ ...finding, status }] }),
+  ];
+  const { gh } = world({ records, allPasses: fullPasses });
+  const next = buildStatus(await loadReview(gh, repo, 1, undefined, { ranges: false })).next;
+  const complete = world({ records: [...records, record("exec")], allPasses: fullPasses });
+  const authorization = await authorize(complete.gh, repo, 1, { dryRun: true });
+  if (status === "open") {
+    expect(next.step).toBe("exec");
+    expect(buildStatus(await loadReview(complete.gh, repo, 1)).next.step).toBe("authorize");
+    expect(authorization).toMatchObject({ ok: true, posted: false, items: [] });
+  } else {
+    const message = "contested finding F7 needs a ruling in pass ruling";
+    expect(next).toMatchObject({ step: "ruling", blocked: message });
+    expect(authorization).toMatchObject({ ok: false, items: [expect.objectContaining({ rule: "ruling", message })] });
+  }
 });
 
 it("rejects synthesis and opener replacements posted after the executor", async () => {

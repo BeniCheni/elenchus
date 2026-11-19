@@ -118,19 +118,21 @@ that admitted each qualifying commit after the review.
 | `authors` | The record's runtime is a configured vendor, and its commits carry that vendor's identity. |
 | `posted_by` | The record's `posted_by` is the comment's author. |
 | `retries` | A rejected record goes back to its seat, and is escalated to a person past `retry_cap` failed attempts; a record's `retries` matches the failures its comments show. |
-| `finding-carry` | Every finding opened by `finding_flow.opens` appears in each `finding_flow.carries` pass. |
+| `finding-carry` | Each carrying pass repeats the opener's IDs. The standing synthesis also carries IDs from earlier synthesis rounds and ruling records posted before it. |
 | `coverage` | For passes marked `coverage`, the record accounts for every path in the diff. Named reviewed paths must match the manifest without gaps or overlap. |
 | `head` | Commits after the last review fall within the configured allowed set or need a re-read. |
 | `ci` | When the head has moved past the reviewed boundary, each configured check is successful at that head and comes from its required App when pinned. |
 
 `authorize` also requires all configured passes to have valid records, enforces configured
 UNVERIFIED blockers, requires full output SHAs for the head decision, and checks CI even at
-the reviewed head. For each finding, it uses the severity and status from a ruling posted
-after the standing synthesis, including a synthesis re-read, when the ruling names that ID.
-Otherwise it uses the standing synthesis. Every blocking finding must be `fixed` or `killed`.
-The ruling must repeat every contested ID from the synthesis. A contested blocking finding
-needs a ruling of `fixed` or `killed`. Other contested findings need a status other than
-`contested`. A same-SHA replacement of a record under schema 1.2 must precede any standing
+the reviewed head. It requires a schema v1.2 standing synthesis and a schema v1.2 ruling
+posted after it. The historical v1.1 replay records on PR 1 therefore fail authorization.
+Schema v1.2 accepts `blocking`, `should-fix` and `note`. A finding blocking in either
+record needs an effective status of `fixed` or `killed`. The ruling supplies the status
+when it names the ID. Otherwise the synthesis supplies it. Other contested findings need
+a status other than `contested`. `status` sends the review to the ruling pass when the
+ruling is missing, stale or leaves findings unsettled. A same-SHA replacement under schema
+v1.2 must precede any standing
 record from a later configured pass. `authorize` reports accepted replacements with both
 comment IDs. Seats follow the roster's vendor separation as a human review rule.
 
@@ -198,8 +200,8 @@ Optional `finding_flow` names `opens`, ordered `carries`, and the later `ruling`
 `blocking_unverified` rules, and `allowed_changes`. The allowed set names `paths`,
 `reread_pass` and optional `version_only` settings for the version `file`, test globs and
 `pattern`. The default version pattern accepts `MAJOR.MINOR.PATCH` with an optional
-prerelease. `authorize` requires `gate.allowed_changes`, `finding_flow.ruling` and at least
-one required check.
+prerelease. `authorize` requires `gate.allowed_changes`, `finding_flow.ruling`, at least one
+carrying pass in `finding_flow.carries` and at least one required check.
 Unknown configuration keys produce notices in `status` and `check` and refusals in `authorize`.
 The adoption example blocks unverified coverage.
 
@@ -211,7 +213,10 @@ executor commits, need green CI at the new head and one of these shapes.
   keeps its original lines and line endings. Only the version strings on the version file's
   top-level `version` line and the lockfile's top-level `version` and `packages[""].version`
   lines can change. A lockfile with `lockfileVersion: 1` has only the top-level version for
-  npm to update, so that project's bump needs a reviewed commit.
+  npm to update, so that project's bump needs a reviewed commit. `npm version` re-serialises
+  `package.json`. If it would reformat the file (for example, expanding a one-line array or
+  object, adding a final newline, or dropping a byte-order mark), bump in a reviewed commit
+  or format the file as npm writes it first.
 - Test changes by exact substitution of the old valid version string with the new valid string.
 - A two-parent merge whose incoming parent is on the base branch and whose parents have
   one merge base. For each path, compare the two parents to that merge base. If only one side changes an entry, the result must

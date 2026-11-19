@@ -290,6 +290,7 @@ function passState(pass: { id: string; role: string; seat: string }, attempts: A
         commentUrl: chosen.commentUrl,
         authorLogin: chosen.authorLogin,
         history: recordHistory(valid),
+        postings: valid,
         posting: chosen,
         priorFailures,
         laterRejections,

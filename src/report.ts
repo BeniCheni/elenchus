@@ -1,5 +1,6 @@
 import { vendorForRuntime } from "./config.js";
 import { postingOrder, recordTimeline } from "./load.js";
+import { checkRuling } from "./ruling.js";
 import { sameSha } from "./sha.js";
 import type {
   CheckItem,
@@ -60,6 +61,13 @@ function commentOf(pass: PassState): string | null {
 }
 
 function nextStep(state: ReviewState, firstOpen: PassState | undefined): StatusView["next"] {
+  const ruling = checkRuling(state);
+  const reason = ruling?.findings[0]?.message;
+  if (ruling && reason && (!firstOpen || state.passes.indexOf(firstOpen) > state.passes.indexOf(ruling.pass)
+      || (firstOpen === ruling.pass && firstOpen.outcome.kind === "absent"))) {
+    const { id, seat, role } = ruling.pass;
+    return { step: id, seat, role, blocked: reason, options: null };
+  }
   if (!firstOpen) {
     return {
       step: "authorize",
@@ -305,8 +313,7 @@ function checkFindings(state: ReviewState, items: CheckItem[]): void {
   const flow = state.config.finding_flow;
   if (!flow) return;
   const opener = recorded(state, flow.opens);
-  if (opener?.outcome.kind !== "recorded") return;
-  const opened = opener.outcome.record.findings.map((finding) => finding.id);
+  const opened = opener?.outcome.kind === "recorded" ? opener.outcome.record.findings.map(({ id }) => id) : [];
   for (const id of flow.carries) {
     const later = recorded(state, id);
     if (!later || later.outcome.kind !== "recorded") continue;
@@ -322,6 +329,26 @@ function checkFindings(state: ReviewState, items: CheckItem[]): void {
           message: `finding ${finding} opened in pass ${flow.opens} is missing`,
         });
       }
+    }
+  }
+  const synthesis = state.passes.find(({ id }) => id === flow.carries.at(-1))?.outcome;
+  if (synthesis?.kind !== "recorded") return;
+  const ruling = state.passes.find(({ id }) => id === flow.ruling)?.outcome;
+  const have = new Set([...opened, ...synthesis.record.findings.map(({ id }) => id)]);
+  // Same-range corrections keep their existing rules. A re-read carries the prior round's IDs.
+  const earlierSyntheses = synthesis.postings.filter(({ record }) =>
+    !sameSha(record.input_sha, synthesis.record.input_sha) || !sameSha(record.output_sha, synthesis.record.output_sha),
+  );
+  for (const posting of [...earlierSyntheses, ...(ruling?.kind === "recorded" ? ruling.postings : [])]) {
+    if (postingOrder(posting, synthesis.posting) >= 0) continue;
+    for (const { id } of posting.record.findings) {
+      if (have.has(id)) continue;
+      have.add(id);
+      items.push({
+        severity: "fail", rule: "finding-carry", pass: synthesis.record.pass, finding: id,
+        comment: synthesis.commentUrl,
+        message: `finding ${id} from pass ${posting.record.pass} record ${posting.commentUrl} is missing`,
+      });
     }
   }
 }

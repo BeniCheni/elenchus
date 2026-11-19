@@ -59,7 +59,7 @@ function parseFindingFlow(value: unknown, passIds: string[], unknownKeys: string
   const label = "config.finding_flow";
   const raw = fields(value, label, unknownKeys, ["opens", "carries", "ruling"]);
   const opens = configuredPass(raw.opens, `${label}.opens`, passIds);
-  const carries = stringList(raw.carries, `${label}.carries`)
+  const carries = (raw.carries === undefined ? [] : stringList(raw.carries, `${label}.carries`))
     .map((id) => configuredPass(id, `${label}.carries`, passIds));
   const ordered = [opens, ...carries];
   const ruling = raw.ruling === undefined ? undefined : configuredPass(raw.ruling, `${label}.ruling`, passIds);

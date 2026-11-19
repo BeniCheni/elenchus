@@ -62,6 +62,7 @@ describe("seat record schema v1.1", () => {
 describe("seat record schema v1.2", () => {
   const record = {
     ...v1,
+    findings: [{ ...v1.findings[0], severity: "note" }],
     schema_version: "1.2",
     input_sha: "a".repeat(40),
     output_sha: "c".repeat(40),
@@ -79,6 +80,15 @@ describe("seat record schema v1.2", () => {
   it("accepts repository-defined passes, a re-read, a handoff route and named paths", () => {
     expect(validateSeatRecord(record).ok).toBe(true);
   });
+
+  it.each(["Blocking", "BLOCKING", "blocker", " blocking", "blocking (raised at Pass 3)"])(
+    "rejects unrecognised finding severity %j (A10 to A14)",
+    (severity) => {
+      expect(validateSeatRecord({ ...record, findings: [{ ...record.findings[0], severity }] })).toMatchObject({
+        ok: false, reason: expect.stringContaining("/findings/0/severity"),
+      });
+    },
+  );
 
   it.each([
     { schema_version: "1.3" },
@@ -107,6 +117,7 @@ describe("seat record schema v1.2", () => {
 describe("v1.2 closed object boundaries", () => {
   const complete = {
     ...v1,
+    findings: [{ ...v1.findings[0], severity: "note" }],
     schema_version: "1.2",
     input_sha: "a".repeat(40),
     output_sha: "c".repeat(40),

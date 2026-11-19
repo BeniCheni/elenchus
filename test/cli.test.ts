@@ -104,7 +104,7 @@ function checkedComments(comments: unknown[]) {
   });
 }
 
-function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCoverage?: boolean; correction?: boolean; changed?: boolean } = {}) {
+function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCoverage?: boolean; correction?: boolean; changed?: boolean; omitRuling?: boolean } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "elenchus-cli-authorize-"));
   const fixtures = path.join(dir, "fixtures");
   mkdirSync(fixtures);
@@ -116,9 +116,10 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
   const baseConfig = kickoffConfig();
   baseConfig.passes = [
     { id: "0", role: "review", seat: "reviewer", coverage: options.omitCoverage === true || options.correction === true },
+    { id: "synthesis", role: "synthesis", seat: "lead" },
     { id: "ruling", role: "ruling", seat: "maintainer" },
   ];
-  baseConfig.finding_flow = { opens: "0", carries: [], ruling: "ruling" };
+  baseConfig.finding_flow = { opens: "0", carries: ["synthesis"], ...(options.omitRuling ? {} : { ruling: "ruling" }) };
   baseConfig.gate!.allowed_changes!.reread_pass = "0";
   baseConfig.gate!.app_id = 459;
   write("/repos/BeniCheni/elenchus/pulls/1", { number: 1, state: "open", head: { sha: head }, base: { sha, ref: "trunk" } });
@@ -126,7 +127,7 @@ function authorizeCli(options: { red?: boolean; incomplete?: boolean; omitCovera
   write(`/repos/BeniCheni/elenchus/contents/.elenchus.json?ref=${sha}`, {
     content: Buffer.from(JSON.stringify(baseConfig)).toString("base64"),
   });
-  const passes = options.correction ? ["0", "0", "ruling"] : ["0", "ruling"];
+  const passes = options.correction ? ["0", "0", "synthesis", "ruling"] : ["0", "synthesis", "ruling"];
   write("/repos/BeniCheni/elenchus/issues/1/comments?per_page=100", options.incomplete ? [] : passes.map((pass, i) => ({
     id: i + 1, html_url: `https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${i + 1}`,
     user: { login: "BeniCheni" }, created_at: `2026-11-14T00:00:0${i + 1}Z`,
@@ -185,4 +186,11 @@ it("prints both replacement IDs and the accepted shape on authorize success, and
   expect(refused.status, refused.stderr + refused.stdout).toBe(1);
   expect(refused.stdout).toContain(notice);
   expect(refused.stdout).toMatch(/FAIL ci verify .*failure/);
+});
+
+it("prints the replacement it relies on when authorize refuses its configuration (D4)", () => {
+  const result = authorizeCli({ correction: true, omitRuling: true });
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stdout).toContain("FAIL config config.finding_flow.ruling is required");
+  expect(result.stdout).toContain("NOTICE record replacement pass 0 comment 2 replaces comment 1 at the same SHAs");
 });

@@ -47,6 +47,7 @@ async function headCheck(options: {
   listVersionFiles?: boolean;
   bump?: Snapshot;
   mergeBases?: [string, string];
+  reviewedIsMergeBase?: boolean;
   truncatedCompare?: "left" | "right";
 }) {
   const config = kickoffConfig();
@@ -73,7 +74,7 @@ async function headCheck(options: {
     [ANCESTOR]: { parents: options.mergeBases ? [ROOT] : [], author: "Codex <noreply@openai.com>" },
     [REVIEWED]: { parents: options.mergeBases ?? [ANCESTOR], author: "Codex <noreply@openai.com>" },
     [OFFBASE]: { parents: [options.mergeBases ? ROOT : ANCESTOR], author: "Codex <noreply@openai.com>" },
-    [BASE]: { parents: options.mergeBases ? [...options.mergeBases].reverse() : [ANCESTOR], author: "Codex <noreply@openai.com>" },
+    [BASE]: { parents: options.mergeBases ? [...options.mergeBases].reverse() : [options.reviewedIsMergeBase ? REVIEWED : ANCESTOR], author: "Codex <noreply@openai.com>" },
     ...(options.bump ? { [BUMP]: { parents: [REVIEWED], author: "Codex <noreply@openai.com>" } } : {}),
     ...(options.mergeBases ? { [ROOT]: { parents: [], author: "Codex <noreply@openai.com>" } } : {}),
     [HEAD]: {
@@ -183,6 +184,14 @@ it("accepts a clean base merge and refuses a dropped reviewed file, an ours merg
       severity: "fail", rule: "head", message: expect.stringContaining("needs a pass finish re-read"),
     });
   }
+});
+
+it("admits a clean merge whose first parent is the merge base", async () => {
+  const before = { "src/index.ts": "reviewed" };
+  const base = { "src/index.ts": "incoming" };
+  expect(await headCheck({ before, base, after: base, secondParent: BASE, reviewedIsMergeBase: true })).toEqual([{
+    severity: "notice", rule: "head", message: expect.stringContaining("merge of the base branch"),
+  }]);
 });
 
 it.each([[ANCESTOR, OFFBASE], [OFFBASE, ANCESTOR]] as [string, string][])(

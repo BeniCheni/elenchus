@@ -215,6 +215,7 @@ export type PassOutcome =
       commentUrl: string;
       authorLogin: string;
       history: RecordedPosting[];
+      postings: RecordedPosting[];
       posting: RecordedPosting;
       priorFailures: number;
       laterRejections: LaterRejection[];
