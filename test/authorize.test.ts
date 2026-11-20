@@ -36,6 +36,7 @@ function world(options: {
   blockRoute?: boolean;
   configAppId?: number;
   head?: string;
+  intermediateHead?: string;
   state?: string;
   repo?: string;
   changedPath?: string;
@@ -55,6 +56,7 @@ function world(options: {
   options.configure?.(configured);
   const head = options.head ?? sha;
   const baseSha = options.changedPath ? sha : head;
+  const heads = options.intermediateHead ? [baseSha, options.intermediateHead, head] : [baseSha, head];
   const pull = { number: 1, state: options.state ?? "open", head: { sha: head }, base: { ref: "trunk", sha: baseSha } };
   const comments = (options.records ?? allPasses.map((pass) => record(pass))).map((entry, i) =>
     comment(i + 1, fenced(entry), `2026-11-14T00:00:${String(i).padStart(2, "0")}Z`),
@@ -77,17 +79,23 @@ function world(options: {
           head_sha: head, app: { id: 15368 },
         }] };
       }
-      if (options.changedPath && path.startsWith(`${root}/compare/${sha}...${head}`)) {
-        return {
-          status: "ahead", total_commits: 1, commits: [{ sha: head, parents: [{ sha }], commit: {
-            author: { name: "Claude", email: "noreply@anthropic.com" },
-          } }],
-        };
+      if (options.changedPath && path.startsWith(`${root}/compare/`)) {
+        const [from, to] = path.slice(`${root}/compare/`.length).split("?")[0]!.split("...");
+        const start = heads.indexOf(from!);
+        const end = heads.indexOf(to!);
+        if (start >= 0 && end > start) {
+          const commits = heads.slice(start + 1, end + 1).map((commit, index) => ({
+            sha: commit, parents: [{ sha: heads[start + index] }],
+            commit: { author: { name: "Claude", email: "noreply@anthropic.com" } },
+          }));
+          return { status: "ahead", total_commits: commits.length, commits };
+        }
       }
       if (options.changedPath && path.startsWith(`${root}/git/trees/`)) {
+        const changed = heads.slice(1).findIndex((commit) => path.includes(commit));
         return {
           truncated: false,
-          tree: path.includes(head) ? [{ path: options.changedPath, sha: "1".repeat(40), mode: "100644", type: "blob" }] : [],
+          tree: changed < 0 ? [] : [{ path: options.changedPath, sha: String(changed + 1).repeat(40), mode: "100644", type: "blob" }],
         };
       }
       throw new Error(`unexpected GET ${path}`);
@@ -424,6 +432,7 @@ it.each([
 });
 
 const rereadHead = "b".repeat(40);
+const thirdHead = "c".repeat(40);
 
 function rereadReview(records: SeatRecord[], findings: SeatRecord["findings"], options: { freshRuling?: boolean; executor?: boolean } = {}) {
   const executor = options.executor ?? true;
@@ -546,26 +555,44 @@ it.each([
 });
 
 it.each([
-  { scenario: "SX7", source: "an opener ID", id: "F1", namedIn: ["1", "2", "2.5"] },
-  { scenario: "SZ2a", source: "a pass 2 ID", id: "F2", namedIn: ["2", "2.5"] },
-  { scenario: "SZ2b", source: "a synthesis ID", id: "F3", namedIn: ["2.5"] },
-])("$scenario requires the ruling re-read to carry $source raised to blocking", async ({ id, namedIn }) => {
+  { scenario: "SX7", side: "ruling", source: "an opener ID", id: "F1", namedIn: ["1", "2", "2.5"], earlierReread: false },
+  { scenario: "SZ2a", side: "ruling", source: "a pass 2 ID", id: "F2", namedIn: ["2", "2.5"], earlierReread: false },
+  { scenario: "SZ2b", side: "ruling", source: "a synthesis ID", id: "F3", namedIn: ["2.5"], earlierReread: false },
+  { scenario: "SM1", side: "ruling", source: "an earlier ruling re-read's ID", id: "F4", namedIn: [], earlierReread: true },
+  { scenario: "SM1s", side: "synthesis", source: "an earlier synthesis re-read's ID", id: "F5", namedIn: [], earlierReread: true },
+  { scenario: "SM5", side: "ruling", source: "a pass 1.5 ID", id: "F6", namedIn: ["1.5"], earlierReread: false },
+  { scenario: "SM5-0", side: "ruling", source: "a pass 0 ID", id: "F7", namedIn: ["0"], earlierReread: false },
+  { scenario: "SM5-exec", side: "ruling", source: "an executor ID", id: "F8", namedIn: ["exec"], earlierReread: true },
+])("$scenario requires the $side re-read to carry $source raised to blocking", async ({ side, id, namedIn, earlierReread }) => {
   const note = { id, severity: "note", status: "open" } as const;
+  const blocking = { ...note, severity: "blocking" };
+  const pass = side === "synthesis" ? "2.5" : "3";
   const records = replayPasses.slice(0, 5).map((pass) => record(pass, {
     findings: namedIn.includes(pass) ? [note] : [],
   }));
+  const execFindings = namedIn.includes("exec") ? [note] : [];
   records.push(
-    record("3", { findings: [{ ...note, severity: "blocking" }] }),
-    record("exec", { output_sha: rereadHead, commits: [rereadHead] }),
-    record("3", { reread: true, input_sha: rereadHead, output_sha: rereadHead }),
+    record("3", { findings: earlierReread ? [] : [blocking] }),
+    record("exec", { output_sha: rereadHead, commits: [rereadHead], findings: execFindings }),
   );
+  const head = earlierReread ? thirdHead : rereadHead;
+  if (earlierReread) {
+    records.push(
+      record(pass, { reread: true, input_sha: rereadHead, output_sha: rereadHead, findings: [blocking] }),
+      record("exec", { reread: true, input_sha: rereadHead, output_sha: head, commits: [head], findings: execFindings }),
+    );
+  }
+  const atHead = { reread: true, input_sha: head, output_sha: head } as const;
+  records.push(record(pass, atHead));
+  if (side === "synthesis") records.push(record("3", atHead));
   const { gh } = world({
-    records, allPasses: replayPasses, boundary: "2.5", head: rereadHead, changedPath: "docs/notes.md",
+    records, allPasses: replayPasses, boundary: "2.5", head, changedPath: "docs/notes.md",
+    ...(earlierReread ? { intermediateHead: rereadHead } : {}),
     configure(config) { config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" }; },
   });
   const carry = expect.objectContaining({
-    severity: "fail", rule: "finding-carry", pass: "3", finding: id,
-    message: `finding ${id} from pass 3 record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6 is missing`,
+    severity: "fail", rule: "finding-carry", pass, finding: id,
+    message: `finding ${id} from pass ${pass} record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${earlierReread ? 8 : 6} is missing`,
   });
   const check = buildCheck(await loadReview(gh, repo, 1));
   expect(check.filter(({ severity }) => severity === "fail")).toEqual([carry]);
@@ -768,6 +795,18 @@ it.each([
   expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step, blocked });
 });
 
+const unknownConfigKeyLocations: [string, string, (config: Config) => object][] = [
+  ["top-level", "config", (config) => config],
+  ["pass", "config.passes[0]", (config) => config.passes[0]!],
+  ["finding_flow", "config.finding_flow", (config) => config.finding_flow!],
+  ["required_checks", "config.gate.required_checks[0]", (config) => config.gate!.required_checks[0]!],
+  ["allowed_changes", "config.gate.allowed_changes", (config) => config.gate!.allowed_changes!],
+  ["version_only", "config.gate.allowed_changes.version_only", (config) => config.gate!.allowed_changes!.version_only!],
+  ["vendor", "config.vendors.claude", (config) => config.vendors.claude!],
+  ["install", "config.installs[0]", (config) => config.installs![0]!],
+  ["handoff", "config.handoff", (config) => config.handoff!],
+];
+
 it.each([
   {
     scenario: "with empty required_checks", dryRun: true,
@@ -789,11 +828,16 @@ it.each([
     change(gate: GateConfig) { delete gate.app_id; },
     message: "authorize requires config.gate.app_id",
   },
+  ...unknownConfigKeyLocations.map(([section, location, target]) => ({
+    scenario: `with an unknown ${section} key`, dryRun: true,
+    change(_gate: GateConfig, config: Config) { Object.assign(target(config), { unexpected: true }); },
+    message: `unknown key ${location}.unexpected`,
+  })),
 ])("routes a legacy synthesis when a gate exists $scenario", async ({ dryRun, change, message }) => {
   const records = replayPasses.map((pass) => (pass === "2.5" ? legacyRecord : record)(pass));
   const { gh } = world({ records, allPasses: replayPasses, configure(config) {
     config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
-    change(config.gate!);
+    change(config.gate!, config);
   } });
   expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step: "2.5", blocked: needsV12 });
   const refusal = { ok: false, items: [{ rule: "config", message }] };
