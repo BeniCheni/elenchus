@@ -136,14 +136,21 @@ describe("coverage rule", () => {
     expect(report).not.toMatch(/FAIL coverage/);
   });
 
-  it("fails closed when the compare has no file list", async () => {
+  it("fails closed when the recursive trees are truncated", async () => {
     const comments = [
       comment(1, fenced(seat({ pass: "0" })), "2026-11-14T00:00:01Z"),
       comment(2, fenced(seat({ pass: "1", input_sha: B, output_sha: B, coverage: matching })), "2026-11-14T00:00:02Z"),
     ];
-    const state = await loadReview(graphGh({ head: B, baseSha: A, comments, nodes }), "BeniCheni/elenchus", 1, kickoffConfig());
+    const inner = graphGh({ head: B, baseSha: A, comments, nodes });
+    const gh: GhClient = {
+      async get(apiPath, options) {
+        if (apiPath.includes("/git/trees/")) return { tree: [], truncated: true };
+        return inner.get(apiPath, options);
+      },
+    };
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
     const report = formatCheck(buildCheck(state));
-    expect(report).toMatch(/FAIL coverage pass 1 .*file list truncated/);
+    expect(report).toMatch(/FAIL coverage pass 1 .*recursive git tree truncated/);
   });
 
   it("still checks a configuration that has none of the new fields", async () => {
@@ -210,4 +217,30 @@ describe("coverage rule", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+it("holds v1.2 reviewed paths to the manifest independently of the numerical totals", async () => {
+  const manifest = [{ status: "added", filename: "added" }, { status: "removed", filename: "deleted" }];
+  const capture = async (reviewed_paths: string[]) => {
+    const records = [
+      seat({ pass: "0", input_sha: B, output_sha: B, schema_version: "1.2", coverage: {
+        total: 2, reviewed: 1, skipped: [{ path: "deleted", reason: "deleted" }], reviewed_paths,
+      } }),
+    ];
+    const inner = graphGh({ head: B, baseSha: A, comments: [comment(1, fenced(records[0]), "2026-11-14T00:00:01Z")], nodes });
+    const gh: GhClient = {
+      async get(apiPath, options) {
+        const value = await inner.get(apiPath, options);
+        return apiPath.includes("/compare/") ? { ...(value as GhCompare), files: manifest } : value;
+      },
+    };
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
+    return formatCheck(buildCheck(state));
+  };
+
+  expect(await capture(["added"])).toBe("ok\n");
+  expect(await capture(["deleted"])).toMatch(/deleted is both reviewed and skipped/);
+  expect(await capture(["elsewhere"])).toMatch(/reviewed elsewhere is not in the manifest/);
+  expect(await capture(["deleted"])).toMatch(/added is missing from reviewed and skipped paths/);
+  expect(await capture([])).toMatch(/reviewed 1 is not the number of reviewed paths 0/);
 });

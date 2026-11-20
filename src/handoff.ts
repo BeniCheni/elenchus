@@ -139,7 +139,7 @@ function readVersion(text: string): string {
 }
 
 async function readContents(gh: GhClient, repo: string, file: string, ref: string): Promise<string> {
-  const payload = (await gh.get(`/repos/${repo}/contents/${file}?ref=${ref}`)) as GhContent;
+  const payload = (await gh.get(`/repos/${repo}/contents/${file.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(ref)}`)) as GhContent;
   if (!payload.content) throw new Error(`no ${file} at ${ref}`);
   return Buffer.from(payload.content, "base64").toString("utf8");
 }

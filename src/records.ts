@@ -11,8 +11,16 @@ export function extractRecord(body: string): string | null {
  * an earlier block, or a near-miss (upper case, a space, four backticks,
  * an indent, or a quote).
  */
+function jsonFenceCount(body: string): number {
+  return body.match(/^[ \t>]*`{3,}[ \t]*json\b/gim)?.length ?? 0;
+}
+
+export function hasJsonFence(body: string): boolean {
+  return jsonFenceCount(body) > 0;
+}
+
 export function hasUnreadJsonFence(body: string): boolean {
-  const count = body.match(/`{3,}[ \t]*json\b/gi)?.length ?? 0;
+  const count = jsonFenceCount(body);
   if (count === 0) return false;
   return extractRecord(body) === null || count > 1;
 }

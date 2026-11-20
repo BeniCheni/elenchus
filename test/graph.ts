@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { parseConfig } from "../src/config.js";
 import type { GhClient, GhGetOptions } from "../src/gh.js";
 import type { Config, GhComment, GhCompare, GhPull } from "../src/types.js";
@@ -8,6 +8,18 @@ export type Node = { parents: string[]; author: string };
 export function kickoffConfig(): Config {
   const file = new URL("../examples/kickoff.elenchus.json", import.meta.url);
   return parseConfig(JSON.parse(readFileSync(file, "utf8")) as unknown);
+}
+
+export function replayConfig(): Config {
+  const dir = new URL("./fixtures/replay-p9/", import.meta.url);
+  const names = readdirSync(dir).filter((name) =>
+    decodeURIComponent(name).startsWith("/repos/BeniCheni/elenchus/contents/.elenchus.json?ref="),
+  );
+  if (names.length !== 1) throw new Error("replay fixture must capture exactly one configuration");
+  const captured = new URL(encodeURIComponent(names[0]!), dir);
+  const { content } = JSON.parse(readFileSync(captured, "utf8")) as { content: string };
+  const { vendors } = parseConfig(JSON.parse(Buffer.from(content, "base64").toString("utf8")) as unknown);
+  return { ...kickoffConfig(), vendors };
 }
 
 export function comment(id: number, body: string, createdAt: string, login = "BeniCheni"): GhComment {
@@ -30,6 +42,7 @@ export function graphGh(input: {
   /** Current tip of the base branch, when the pull request object still names an older SHA. */
   branchTip?: string;
   baseRef?: string;
+  mergedAt?: string;
   comments: GhComment[];
   nodes: Record<string, Node>;
   calls?: { path: string; paginate?: boolean }[];
@@ -54,7 +67,7 @@ export function graphGh(input: {
   const compare = (base: string, head: string): GhCompare => {
     const baseSha = resolve(base);
     const headSha = resolve(head);
-    if (baseSha === headSha) return { status: "identical", total_commits: 0, commits: [] };
+    if (baseSha === headSha) return { status: "identical", total_commits: 0, commits: [], files: [], merge_base_commit: { sha: baseSha } };
     const fromHead = reachable(headSha);
     const fromBase = reachable(baseSha);
     let status: GhCompare["status"];
@@ -65,9 +78,11 @@ export function graphGh(input: {
     return {
       status,
       total_commits: shas.length,
+      base_commit: { sha: baseSha },
+      merge_base_commit: { sha: [...fromHead].find((sha) => fromBase.has(sha)) ?? baseSha },
       commits: shas.map((sha) => {
         const [name, email] = splitAuthor(nodes[sha]?.author ?? " <");
-        return { sha, commit: { author: { name, email } } };
+        return { sha, parents: nodes[sha]?.parents.map((sha) => ({ sha })), commit: { author: { name, email } } };
       }),
     };
   };
@@ -75,6 +90,7 @@ export function graphGh(input: {
     number: 1,
     html_url: "https://github.com/BeniCheni/elenchus/pull/1",
     head: { sha: resolve(input.head) },
+    ...(input.mergedAt ? { merged: true, merge_commit_sha: input.mergedAt } : {}),
     base: { sha: resolve(input.baseSha), ref: input.baseRef ?? "replay/main" },
   };
   const branchTip = resolve(input.branchTip ?? input.baseSha);
@@ -82,9 +98,14 @@ export function graphGh(input: {
     async get(apiPath: string, options?: GhGetOptions) {
       input.calls?.push({ path: apiPath, ...(options?.paginate ? { paginate: true } : {}) });
       if (apiPath === "/repos/BeniCheni/elenchus/pulls/1") return pull;
-      if (apiPath === `/repos/BeniCheni/elenchus/commits/${pull.base.ref}`) return { sha: branchTip };
+      if (apiPath === `/repos/BeniCheni/elenchus/commits/${encodeURIComponent(`heads/${pull.base.ref}`)}`) {
+        return { sha: branchTip };
+      }
+      if (input.mergedAt && apiPath === `/repos/BeniCheni/elenchus/commits/${input.mergedAt}`) {
+        return { parents: nodes[input.mergedAt]?.parents.map((sha) => ({ sha })) };
+      }
       if (apiPath.startsWith("/repos/BeniCheni/elenchus/issues/1/comments")) return input.comments;
-      const match = apiPath.match(/\/compare\/([^./]+)\.\.\.([^./]+)$/);
+      const match = apiPath.match(/\/compare\/([^./]+)\.\.\.([^./?]+)(?:\?per_page=100)?$/);
       if (match) return compare(match[1] ?? "", match[2] ?? "");
       throw new Error(`unexpected GET ${apiPath}`);
     },

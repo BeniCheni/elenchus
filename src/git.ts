@@ -1,4 +1,5 @@
 import path from "node:path";
+import { seatCredentialArgs } from "./seat-credentials.js";
 
 /**
  * Allow only the exact git invocations prep makes. Anything else is refused
@@ -9,6 +10,7 @@ export type GitScope = {
   root: string;
   /** Absolute paths `-C` may name: the fetch cache and the seat being made. */
   places: string[];
+  seatKeychainService?: string;
 };
 
 export function assertGitAllowed(args: string[], scope: GitScope): void {
@@ -18,26 +20,14 @@ export function assertGitAllowed(args: string[], scope: GitScope): void {
 
 function allowed(args: string[], scope: GitScope): boolean {
   if (args.length === 2 && args[0] === "rev-parse" && args[1] === "--git-dir") return true;
-  if (args[0] === "clone" && args[1] === "--bare" && args.length === 4) {
-    return isToken(args[2]) && underRoot(scope, args[3]);
-  }
-  if (
-    args.length === 9 &&
-    args[0] === "clone" &&
-    args[1] === "--reference" &&
-    args[3] === "--dissociate" &&
-    args[4] === "--no-checkout" &&
-    args[5] === "--branch" &&
-    isToken(args[6]) &&
-    isToken(args[7])
-  ) {
-    return underRoot(scope, args[2]) && underRoot(scope, args[8]);
-  }
+  if (args[0] === "clone") return allowClone(args.slice(1), scope);
   if (args[0] !== "-C" || args.length < 3) return false;
   const place = args[1];
   if (!place || !isPlace(scope, place)) return false;
   const rest = args.slice(2);
-  if (same(rest, ["fetch", "origin", "+refs/heads/*:refs/heads/*"])) return true;
+  const service = scope.seatKeychainService;
+  if (service && isCache(scope, place) &&
+      same(rest, [...seatCredentialArgs("-c", service), "fetch", "origin", "+refs/heads/*:refs/heads/*"])) return true;
   if (same(rest, ["rev-parse", "HEAD"])) return true;
   if (same(rest, ["checkout", "--force", "HEAD"])) return isSeat(scope, place);
   if (same(rest, ["status", "--porcelain"])) return true;
@@ -57,6 +47,20 @@ function allowed(args: string[], scope: GitScope): boolean {
     return rest.slice(2).every(isRelativePath);
   }
   return false;
+}
+
+function allowClone(args: string[], scope: GitScope): boolean {
+  const service = scope.seatKeychainService;
+  if (!service) return false;
+  const expected = seatCredentialArgs("--config", service);
+  if (!same(args.slice(0, expected.length), expected)) return false;
+  const clone = args.slice(expected.length);
+  if (clone.length === 3 && clone[0] === "--bare") {
+    return isToken(clone[1]) && isCache(scope, clone[2]);
+  }
+  return clone.length === 8 && clone[0] === "--reference" && isCache(scope, clone[1]) &&
+    clone[2] === "--dissociate" && clone[3] === "--no-checkout" && clone[4] === "--branch" &&
+    isToken(clone[5]) && isToken(clone[6]) && isSeat(scope, clone[7]);
 }
 
 function same(left: string[], right: string[]): boolean {
@@ -79,9 +83,14 @@ function underRoot(scope: GitScope, target: string | undefined): boolean {
   return resolved === root || resolved.startsWith(`${root}${path.sep}`);
 }
 
-function isSeat(scope: GitScope, target: string): boolean {
+function isCache(scope: GitScope, target: string | undefined): boolean {
+  const cache = scope.places[0];
+  return Boolean(target && cache && underRoot(scope, target) && path.resolve(target) === path.resolve(cache));
+}
+
+function isSeat(scope: GitScope, target: string | undefined): boolean {
   const seat = scope.places[scope.places.length - 1];
-  return Boolean(seat) && scope.places.length > 1 && path.resolve(target) === path.resolve(seat);
+  return Boolean(target && seat && scope.places.length > 1 && underRoot(scope, target) && path.resolve(target) === path.resolve(seat));
 }
 
 function isPlace(scope: GitScope, target: string): boolean {

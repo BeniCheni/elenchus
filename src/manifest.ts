@@ -1,3 +1,5 @@
+import type { GhClient } from "./gh.js";
+
 import type { GhCompare, GhCompareFile } from "./types.js";
 
 export type ManifestPath = { status: "A" | "D" | "M"; path: string };
@@ -82,4 +84,47 @@ function parseNameStatus(records: string[]): ManifestPath[] {
     throw new Error(`manifest status ${status} is not A, D or M`);
   }
   return entries;
+}
+
+type TreeEntry = { path: string; mode: string; type: string; sha: string };
+type GitTree = { tree: TreeEntry[]; truncated: boolean };
+type Manifest = { paths: string[]; error: string | null };
+
+export async function readManifest(
+  gh: GhClient,
+  repo: string,
+  compare: GhCompare,
+  input: string,
+): Promise<Manifest> {
+  const direct = manifestFromCompare(compare);
+  if (direct.error !== "file list truncated") return direct;
+  const base = compare.merge_base_commit?.sha;
+  if (!base) throw new Error("compare returned no merge base for the coverage manifest");
+  const [from, to] = await Promise.all([readTree(gh, repo, base), readTree(gh, repo, input)]);
+  if (from.truncated || to.truncated) return { paths: [], error: "recursive git tree truncated" };
+  return { paths: diffTrees(from.tree, to.tree).map(({ path }) => path), error: null };
+}
+
+export async function readTree(gh: GhClient, repo: string, ref: string): Promise<GitTree> {
+  return await gh.get(`/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`) as GitTree;
+}
+
+/** Compare the path, mode, and object of every file, symlink, and submodule. */
+export function diffTrees(from: TreeEntry[], to: TreeEntry[]): ManifestPath[] {
+  const before = leafEntries(from);
+  const after = leafEntries(to);
+  const changes: ManifestPath[] = [];
+  for (const [path, entry] of before) {
+    const next = after.get(path);
+    if (!next) changes.push({ path, status: "D" });
+    else if (next.sha !== entry.sha || next.mode !== entry.mode) changes.push({ path, status: "M" });
+  }
+  for (const path of after.keys()) {
+    if (!before.has(path)) changes.push({ path, status: "A" });
+  }
+  return changes;
+}
+
+function leafEntries(tree: TreeEntry[]): Map<string, TreeEntry> {
+  return new Map(tree.filter((entry) => entry.type !== "tree").map((entry) => [entry.path, entry]));
 }

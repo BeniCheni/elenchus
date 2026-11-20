@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/BeniCheni/elenchus/schema/seat-record-1.2.json",
+  "title": "elenchus seat record v1.2",
+  "description": "Records with schema_version 1.2 can use repository-defined pass ids.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "seat_record",
+    "schema_version",
+    "pr",
+    "pass",
+    "runtime",
+    "model",
+    "effort",
+    "route",
+    "input_sha",
+    "output_sha",
+    "commits",
+    "findings",
+    "verdict"
+  ],
+  "properties": {
+    "seat_record": { "const": 1 },
+    "schema_version": { "const": "1.2" },
+    "pr": { "type": "integer", "minimum": 1 },
+    "pass": { "type": "string", "minLength": 1 },
+    "reread": { "const": true },
+    "runtime": { "type": "string", "minLength": 1 },
+    "runtime_version": { "type": "string" },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "log"],
+      "properties": {
+        "id": { "type": "string" },
+        "log": { "type": "string" }
+      }
+    },
+    "model": { "$ref": "#/$defs/observedRoute" },
+    "effort": { "$ref": "#/$defs/observedRoute" },
+    "mode": { "$ref": "#/$defs/observed" },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["recommended_by", "confirmed_by"],
+      "properties": {
+        "recommended_by": { "type": ["string", "null"] },
+        "confirmed_by": { "type": ["string", "null"] },
+        "by_hand": { "type": "boolean" }
+      }
+    },
+    "next_route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime", "model", "effort", "recommended_by", "confirmed_by"],
+      "properties": {
+        "runtime": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 },
+        "effort": { "type": "string", "minLength": 1 },
+        "recommended_by": { "type": ["string", "null"] },
+        "confirmed_by": { "type": ["string", "null"] }
+      }
+    },
+    "posted_by": { "type": "string" },
+    "input_sha": { "$ref": "#/$defs/sha" },
+    "output_sha": { "$ref": "#/$defs/sha" },
+    "commits": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sha" }
+    },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "reviewed", "skipped"],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "reviewed": { "type": "integer", "minimum": 0 },
+        "reviewed_paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "reason"],
+            "properties": {
+              "path": { "type": "string" },
+              "reason": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "not_verified": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "retries": { "type": "integer", "minimum": 0 },
+    "verdict": { "type": "string" }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9a-fA-F]{40}$" },
+    "observed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "observed"],
+      "properties": {
+        "requested": { "type": ["string", "null"] },
+        "observed": { "type": ["string", "null"] },
+        "source": { "type": "string" }
+      }
+    },
+    "observedRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requested", "observed"],
+      "properties": {
+        "requested": { "type": "string" },
+        "observed": { "type": ["string", "null"] },
+        "source": { "type": "string", "minLength": 1 }
+      },
+      "if": { "properties": { "observed": { "type": "null" } } },
+      "then": {
+        "properties": { "source": true },
+        "required": ["source"]
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "severity", "status"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["blocking", "should-fix", "note"] },
+        "status": { "enum": ["open", "fixed", "contested", "killed"] },
+        "disposition": {
+          "enum": ["accept", "contest", "accept-observation-contest-severity"]
+        },
+        "evidence": { "type": "string" },
+        "path": { "type": "string" },
+        "start_line": { "type": "integer" },
+        "end_line": { "type": "integer" },
+        "category": { "type": "string" }
+      }
+    }
+  }
+}

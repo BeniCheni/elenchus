@@ -4,9 +4,11 @@ import path from "node:path";
 import type { GhClient } from "./gh.js";
 import { runCommand } from "./gh.js";
 import { assertGitAllowed, type GitScope } from "./git.js";
-import { loadReview } from "./load.js";
+import { vendorForRuntime } from "./config.js";
+import { loadReview, recordTimeline, rereadBoundary } from "./load.js";
 import { manifestFromNameStatus, type ManifestPath } from "./manifest.js";
 import { CODEX_PROFILE_LOADS, codexTrustConfig, profilePath, renderProfile, type VendorName } from "./profile.js";
+import { seatCredentialArgs, withSeatToken } from "./seat-credentials.js";
 import { shellQuote } from "./quote.js";
 import { sameSha } from "./sha.js";
 import type { Config, InstallConfig, ReviewState, SeatKind, VendorConfig } from "./types.js";
@@ -22,6 +24,7 @@ export type PrepRequest = {
   model: string;
   effort: string;
   confirmedBy: string;
+  seatKeychainService?: string;
   root?: string;
   config?: Config;
   cloneUrl?: string;
@@ -73,17 +76,17 @@ export function cachePath(root: string, repo: string): string {
 }
 
 export function seatPath(root: string, repo: string, pr: number, pass: string): string {
-  return path.join(root, repo, `pr-${pr}-pass-${pass}`);
+  return path.join(root, repo, `pr-${pr}-pass-${encodeURIComponent(pass)}`);
 }
 
 export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   const root = path.resolve(request.root ?? defaultSeatRoot());
-  const scope: GitScope = { root, places: [] };
+  const scope: GitScope = { root, places: [], seatKeychainService: request.seatKeychainService };
   const run = request.run ?? ((command, args, cwd) => defaultRun(command, args, cwd, scope));
   await refuseRootInsideGit(root, run);
   await mkdir(root, { recursive: true });
 
-  const state = await loadReview(request.gh, request.repo, request.pr, request.config);
+  const state = await loadReview(request.gh, request.repo, request.pr, request.config, { ranges: false });
   const pass = state.passes.find((item) => item.id === request.pass);
   if (!pass) throw new Error(`pass ${request.pass} is not in the configuration`);
   const seatKind = passSeatKind(state, request.pass);
@@ -103,29 +106,39 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   if (gap) lines.push(`no valid record for pass ${gap}`);
   if (lines.length > 0) throw new Error(lines.join("\n"));
 
-  if (!request.runtime || !request.model || !request.effort || !request.confirmedBy) {
-    throw new Error("prep requires --runtime, --model, --effort and --confirmed-by");
+  const passIndex = state.passes.indexOf(pass);
+  const previous = state.passes[passIndex - 1]?.outcome;
+  const nextRoute = previous?.kind === "recorded" ? previous.record.next_route : undefined;
+  const runtimeChoice = request.runtime || nextRoute?.runtime;
+  const model = request.model || nextRoute?.model;
+  const effort = request.effort || nextRoute?.effort;
+  const confirmedBy = request.confirmedBy || nextRoute?.confirmed_by;
+  if (!runtimeChoice || !model || !effort || !confirmedBy) {
+    throw new Error("prep requires --runtime, --model, --effort and --confirmed-by or a confirmed next_route");
   }
-  const vendorName = vendorNameOf(request.runtime);
+  const vendorName = vendorNameOf(vendorForRuntime(state.config, runtimeChoice)?.name ?? runtimeChoice);
   const vendor = state.config.vendors[vendorName];
-  if (!vendor) throw new Error(`runtime ${request.runtime} is not a configured vendor`);
-  if (!Object.hasOwn(vendor.models, request.model)) {
-    throw new Error(`model ${request.model} is not in the ${request.runtime} table`);
+  if (!vendor) throw new Error(`runtime ${runtimeChoice} is not a configured vendor`);
+  const runtime = vendor.runtimes.includes(runtimeChoice) ? runtimeChoice : runtimeName(vendorName, vendor);
+  if (!Object.hasOwn(vendor.models, model)) {
+    throw new Error(`model ${model} is not in the ${runtimeChoice} table`);
   }
-  if (!Object.hasOwn(vendor.efforts, request.effort)) {
-    throw new Error(`effort ${request.effort} is not in the ${request.runtime} table`);
+  if (!Object.hasOwn(vendor.efforts, effort)) {
+    throw new Error(`effort ${effort} is not in the ${runtimeChoice} table`);
   }
   if (vendorName === "cursor") {
-    const suffix = request.model.slice(request.model.lastIndexOf("-") + 1);
-    if (suffix !== request.effort) {
-      throw new Error(`cursor effort is the model id suffix: ${request.model} is not ${request.effort}`);
+    const suffix = model.slice(model.lastIndexOf("-") + 1);
+    if (suffix !== effort) {
+      throw new Error(`cursor effort is the model id suffix: ${model} is not ${effort}`);
     }
   }
   if (seatKind === "read-only" && vendor.read_only_seat !== true) {
-    throw new Error(`${request.runtime} may not hold a read-only seat`);
+    throw new Error(`${runtimeChoice} may not hold a read-only seat`);
   }
 
-  const expected = expectedSha(state, request.pass);
+  const boundary = rereadBoundary(state.config, state.passes);
+  const reread = boundary?.pass === request.pass && !sameSha(state.head, boundary.output_sha);
+  const expected = reread ? state.head : expectedSha(state, request.pass);
   if (!sameSha(state.head, expected)) {
     throw new Error(`head ${state.head} is not the expected ${expected}`);
   }
@@ -135,13 +148,23 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
   if (!installs || installs.length === 0) throw new Error("config has no installs");
   if (!forbidden || forbidden.length === 0) throw new Error("config has no forbidden commands");
 
-  const headRef = await headRefOf(request.gh, request.repo, request.pr);
+  if (state.pull.head.repo?.full_name?.toLowerCase() !== request.repo.toLowerCase()) {
+    throw new Error("pull requests from forks are not supported");
+  }
+  const headRef = state.pull.head.ref;
+  if (!headRef) throw new Error("pull request has no head ref");
+  const service = request.seatKeychainService;
+  if (!service || /[\r\n\0]/.test(service)) {
+    throw new Error("prep requires --seat-keychain-service with a Keychain item name");
+  }
   const cloneUrl = request.cloneUrl ?? `https://github.com/${request.repo}.git`;
-  await ensureCache(cache, cloneUrl, run);
-  await run("git", ["-C", cache, "fetch", "origin", FETCH]);
+  const cloneCredentials = seatCredentialArgs("--config", service);
+  await ensureCache(cache, cloneUrl, cloneCredentials, run);
+  await run("git", ["-C", cache, ...seatCredentialArgs("-c", service), "fetch", "origin", FETCH]);
   await mkdir(path.dirname(seat), { recursive: true });
   await run("git", [
     "clone",
+    ...cloneCredentials,
     "--reference",
     cache,
     "--dissociate",
@@ -160,16 +183,23 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
     throw new Error(`head ${head} is not the expected ${expected}`);
   }
 
-  const runtime = runtimeName(vendorName, vendor);
   const stampBody = `${JSON.stringify(
     {
       pr: request.pr,
       pass: request.pass,
       expected_sha: head,
+      ...(reread ? { reread: true } : {}),
       runtime,
-      model: request.model,
-      effort: request.effort,
-      confirmed_by: request.confirmedBy,
+      model,
+      effort,
+      recommended_by: nextRoute?.recommended_by ?? null,
+      confirmed_by: confirmedBy,
+      route_source: {
+        runtime: request.runtime ? "flag" : "record",
+        model: request.model ? "flag" : "record",
+        effort: request.effort ? "flag" : "record",
+        confirmed_by: request.confirmedBy ? "flag" : "record",
+      },
       by_hand: true,
     },
     null,
@@ -183,7 +213,7 @@ export async function prepareSeat(request: PrepRequest): Promise<PrepReport> {
 
   const installed = await installSeat(seat, installs, run);
   await assertSymlinksInside(seat);
-  const launch = launchLine(seat, vendorName, request.model, request.effort, seatKind, vendor.binary);
+  const launch = `cd ${shellQuote(seat)} && ${withSeatToken(service, vendorCommand(seat, vendorName, model, effort, seatKind, vendor.binary))}`;
   const mergeBase = (await run("git", ["-C", seat, "merge-base", `origin/${state.baseRef}`, head])).trim();
   const nameStatus = await run("git", [
     "-C",
@@ -306,24 +336,12 @@ export async function writeExcluded(seat: string, files: { file: string; body: s
   }
 }
 
-async function ensureCache(cache: string, cloneUrl: string, run: Runner): Promise<void> {
+async function ensureCache(cache: string, cloneUrl: string, credentials: string[], run: Runner): Promise<void> {
   const exists = await lstat(cache).catch(() => null);
   if (!exists) {
     await mkdir(path.dirname(cache), { recursive: true });
-    await run("git", ["clone", "--bare", cloneUrl, cache]);
+    await run("git", ["clone", ...credentials, "--bare", cloneUrl, cache]);
   }
-}
-
-async function headRefOf(gh: GhClient, repo: string, pr: number): Promise<string> {
-  const pull = (await gh.get(`/repos/${repo}/pulls/${pr}`)) as {
-    head?: { ref?: string; repo?: { full_name?: string } | null };
-  };
-  if (pull.head?.repo?.full_name !== repo) {
-    throw new Error("pull requests from forks are not supported");
-  }
-  const ref = pull.head?.ref;
-  if (!ref) throw new Error("pull request has no head ref");
-  return ref;
 }
 
 function passSeatKind(state: ReviewState, passId: string): SeatKind {
@@ -346,11 +364,11 @@ function runtimeName(vendor: VendorName, configured: VendorConfig): string {
 function expectedSha(state: ReviewState, passId: string): string {
   const index = state.passes.findIndex((pass) => pass.id === passId);
   if (index === 0) return state.head;
-  const previous = [...state.passes.slice(0, index)].reverse().find((pass) => pass.outcome.kind === "recorded");
-  if (!previous || previous.outcome.kind !== "recorded") {
+  const previous = recordTimeline(state.passes.slice(0, index)).at(-1);
+  if (!previous) {
     throw new Error(`pass ${passId} has no previous record to take a SHA from`);
   }
-  return previous.outcome.record.output_sha;
+  return previous.record.output_sha;
 }
 
 /**
@@ -382,15 +400,14 @@ async function openSeats(root: string, state: ReviewState): Promise<{ pass: stri
   const found: { pass: string; seat: string }[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
-    const passId = entry.name.slice(prefix.length);
-    const pass = state.passes.find((item) => item.id === passId);
+    const pass = state.passes.find((item) => `${prefix}${encodeURIComponent(item.id)}` === entry.name);
     if (!pass || pass.outcome.kind === "recorded") continue;
-    found.push({ pass: passId, seat: path.join(repoDir, entry.name) });
+    found.push({ pass: pass.id, seat: path.join(repoDir, entry.name) });
   }
   return found;
 }
 
-function launchLine(
+function vendorCommand(
   seat: string,
   vendor: VendorName,
   model: string,
@@ -398,18 +415,17 @@ function launchLine(
   kind: SeatKind,
   binary?: string,
 ): string {
-  const prefix = `cd ${shellQuote(seat)} && `;
   if (vendor === "claude") {
     const plan = kind === "read-only" ? " --permission-mode plan" : "";
-    return `${prefix}claude --model ${shellQuote(model)} --effort ${shellQuote(effort)}${plan}`;
+    return `claude --model ${shellQuote(model)} --effort ${shellQuote(effort)}${plan}`;
   }
   if (vendor === "codex") {
     if (!binary) throw new Error("codex binary is not in the configuration");
     const sandbox = kind === "read-only" ? "read-only" : "workspace-write";
     const trust = CODEX_PROFILE_LOADS ? ` -c ${shellQuote(codexTrustConfig(seat))}` : "";
-    return `${prefix}${shellQuote(binary)} -m ${shellQuote(model)} -c ${shellQuote(`model_reasoning_effort=${effort}`)} --sandbox ${shellQuote(sandbox)}${trust}`;
+    return `${shellQuote(binary)} -m ${shellQuote(model)} -c ${shellQuote(`model_reasoning_effort=${effort}`)} --sandbox ${shellQuote(sandbox)}${trust}`;
   }
-  return `${prefix}agent --model ${shellQuote(model)}`;
+  return `agent --model ${shellQuote(model)}`;
 }
 
 async function refuseRootInsideGit(root: string, run: Runner): Promise<void> {
@@ -466,6 +482,8 @@ export async function defaultRun(
     assertGitAllowed(args, scope);
     return runCommand(command, args, { ...(cwd ? { cwd } : {}), env: prepGitEnv() });
   }
-  if (command !== "npm") throw new Error(`command refused: ${command}`);
+  if (command !== "npm" || args.length !== 1 || args[0] !== "ci") {
+    throw new Error(`command refused: ${command}`);
+  }
   return runCommand(command, args, cwd ? { cwd } : {});
 }
