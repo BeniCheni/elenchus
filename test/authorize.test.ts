@@ -7,7 +7,7 @@ import { authorize } from "../src/authorize.js";
 import type { GhClient } from "../src/gh.js";
 import { loadReview } from "../src/load.js";
 import { buildCheck, buildStatus } from "../src/report.js";
-import type { Config, SeatRecord } from "../src/types.js";
+import type { Config, GateConfig, SeatRecord } from "../src/types.js";
 import { comment, fenced, kickoffConfig } from "./graph.js";
 
 const repo = "owner/repo";
@@ -545,10 +545,14 @@ it.each([
   expect(buildStatus(state).next).toMatchObject({ step: "authorize", blocked: "authorization required" });
 });
 
-it("SX7 requires the ruling re-read to carry an opener ID raised to blocking", async () => {
-  const note = { id: "F1", severity: "note", status: "open" } as const;
+it.each([
+  { scenario: "SX7", source: "an opener ID", id: "F1", namedIn: ["1", "2", "2.5"] },
+  { scenario: "SZ2a", source: "a pass 2 ID", id: "F2", namedIn: ["2", "2.5"] },
+  { scenario: "SZ2b", source: "a synthesis ID", id: "F3", namedIn: ["2.5"] },
+])("$scenario requires the ruling re-read to carry $source raised to blocking", async ({ id, namedIn }) => {
+  const note = { id, severity: "note", status: "open" } as const;
   const records = replayPasses.slice(0, 5).map((pass) => record(pass, {
-    findings: ["1", "2", "2.5"].includes(pass) ? [note] : [],
+    findings: namedIn.includes(pass) ? [note] : [],
   }));
   records.push(
     record("3", { findings: [{ ...note, severity: "blocking" }] }),
@@ -560,8 +564,8 @@ it("SX7 requires the ruling re-read to carry an opener ID raised to blocking", a
     configure(config) { config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" }; },
   });
   const carry = expect.objectContaining({
-    severity: "fail", rule: "finding-carry", pass: "3", finding: "F1",
-    message: "finding F1 from pass 3 record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6 is missing",
+    severity: "fail", rule: "finding-carry", pass: "3", finding: id,
+    message: `finding ${id} from pass 3 record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6 is missing`,
   });
   const check = buildCheck(await loadReview(gh, repo, 1));
   expect(check.filter(({ severity }) => severity === "fail")).toEqual([carry]);
@@ -701,10 +705,26 @@ it("routes an earlier pass in progress before the missing ruling", async () => {
   });
 });
 
+it("routes an earlier pass in progress before the legacy synthesis", async () => {
+  const records = [record("0"), record("1"), record("2"), legacyRecord("2.5")];
+  const { gh } = world({
+    records, allPasses: replayPasses, head: rereadHead, changedPath: "docs/notes.md",
+    configure(config) { config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" }; },
+  });
+  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({
+    step: "1.5",
+    blocked: "commits pushed after pass 1 and pass 1.5 has no record",
+    options: ["wait", "re-route"],
+  });
+});
+
 it.each([
   { scenario: "N1", missing: "1.5", rejected: 0, fresh: false, legacy: false, step: "1.5", blocked: "no record for pass 1.5" },
   { scenario: "N2", missing: "1.5", rejected: 1, fresh: false, legacy: false, step: "1.5", blocked: retry },
   { scenario: "N3", missing: "1.5", rejected: 3, fresh: false, legacy: false, step: "escalate to Beni", blocked: "pass 1.5 exceeded retry cap 2 after 3 failed attempts" },
+  { scenario: "N1 (legacy synthesis)", missing: "1.5", rejected: 0, fresh: false, legacy: true, step: "1.5", blocked: "no record for pass 1.5" },
+  { scenario: "N2 (legacy synthesis)", missing: "1.5", rejected: 1, fresh: false, legacy: true, step: "1.5", blocked: retry },
+  { scenario: "N3 (legacy synthesis)", missing: "1.5", rejected: 3, fresh: false, legacy: true, step: "escalate to Beni", blocked: "pass 1.5 exceeded retry cap 2 after 3 failed attempts" },
   { scenario: "N3b", missing: "1.5", rejected: 3, fresh: true, legacy: false, step: "escalate to Beni", blocked: "pass 1.5 exceeded retry cap 2 after 3 failed attempts" },
   { scenario: "N4", missing: "3", rejected: 1, fresh: false, legacy: true, step: "2.5", blocked: needsV12 },
   { scenario: "N5", missing: "3", rejected: 3, fresh: false, legacy: true, step: "2.5", blocked: needsV12 },
@@ -748,15 +768,45 @@ it.each([
   expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step, blocked });
 });
 
-it("routes a legacy synthesis when a gate exists without allowed_changes", async () => {
+it.each([
+  {
+    scenario: "with empty required_checks", dryRun: true,
+    change(gate: GateConfig) { gate.required_checks = []; },
+    message: "config.gate.required_checks must list at least one check",
+  },
+  {
+    scenario: "with an unknown gate key", dryRun: true,
+    change(gate: GateConfig) { Object.assign(gate, { unexpected: true }); },
+    message: "unknown key config.gate.unexpected",
+  },
+  {
+    scenario: "without allowed_changes", dryRun: true,
+    change(gate: GateConfig) { delete gate.allowed_changes; },
+    message: "config.gate.allowed_changes is required",
+  },
+  {
+    scenario: "without app_id", dryRun: false,
+    change(gate: GateConfig) { delete gate.app_id; },
+    message: "authorize requires config.gate.app_id",
+  },
+])("routes a legacy synthesis when a gate exists $scenario", async ({ dryRun, change, message }) => {
   const records = replayPasses.map((pass) => (pass === "2.5" ? legacyRecord : record)(pass));
   const { gh } = world({ records, allPasses: replayPasses, configure(config) {
     config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
-    delete config.gate!.allowed_changes;
+    change(config.gate!);
   } });
   expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step: "2.5", blocked: needsV12 });
-  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
-    ok: false, items: [{ rule: "config", message: "config.gate.allowed_changes is required" }],
+  const refusal = { ok: false, items: [{ rule: "config", message }] };
+  if (dryRun) {
+    expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject(refusal);
+    return;
+  }
+  await withLocalApp(async (origin, requests) => {
+    const keys: string[] = [];
+    const result = await authorize(gh, repo, 1, { app: makeApp(origin, keys), keychainService: service });
+    expect(result).toMatchObject(refusal);
+    expect(keys).toEqual([]);
+    expect(requests).toEqual([]);
   });
 });
 
