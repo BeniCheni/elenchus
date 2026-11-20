@@ -545,6 +545,31 @@ it.each([
   expect(buildStatus(state).next).toMatchObject({ step: "authorize", blocked: "authorization required" });
 });
 
+it("SX7 requires the ruling re-read to carry an opener ID raised to blocking", async () => {
+  const note = { id: "F1", severity: "note", status: "open" } as const;
+  const records = replayPasses.slice(0, 5).map((pass) => record(pass, {
+    findings: ["1", "2", "2.5"].includes(pass) ? [note] : [],
+  }));
+  records.push(
+    record("3", { findings: [{ ...note, severity: "blocking" }] }),
+    record("exec", { output_sha: rereadHead, commits: [rereadHead] }),
+    record("3", { reread: true, input_sha: rereadHead, output_sha: rereadHead }),
+  );
+  const { gh } = world({
+    records, allPasses: replayPasses, boundary: "2.5", head: rereadHead, changedPath: "docs/notes.md",
+    configure(config) { config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" }; },
+  });
+  const carry = expect.objectContaining({
+    severity: "fail", rule: "finding-carry", pass: "3", finding: "F1",
+    message: "finding F1 from pass 3 record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6 is missing",
+  });
+  const check = buildCheck(await loadReview(gh, repo, 1));
+  expect(check.filter(({ severity }) => severity === "fail")).toEqual([carry]);
+  const result = await authorize(gh, repo, 1, { dryRun: true });
+  expect(result.ok).toBe(false);
+  expect(result.items.filter(({ severity }) => severity === "fail")).toEqual([carry]);
+});
+
 it("carries ruling IDs named in a correction to an earlier round", async () => {
   const { gh } = rulingReread([], true, true);
   const check = buildCheck(await loadReview(gh, repo, 1));
@@ -655,6 +680,83 @@ it("keeps retry handling for a rejected ruling record", async () => {
   const state = await loadReview(gh, repo, 1, undefined, { ranges: false });
   expect(buildStatus(state).next).toMatchObject({
     step: "ruling", blocked: "record rejected after 1 failed attempt(s); back to the seat",
+  });
+});
+
+const retry = "record rejected after 1 failed attempt(s); back to the seat";
+const needsV12 = "authorize requires a schema v1.2 record";
+const settledFinding = { id: "F1", severity: "note", status: "open" } as const;
+const contestedFinding = { ...settledFinding, status: "contested" } as const;
+
+it("routes an earlier pass in progress before the missing ruling", async () => {
+  const records = ["0", "1", "2", "2.5"].map((pass) => record(pass));
+  const { gh } = world({
+    records, allPasses: replayPasses, head: rereadHead, changedPath: "docs/notes.md",
+    configure(config) { config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" }; },
+  });
+  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({
+    step: "1.5",
+    blocked: "commits pushed after pass 1 and pass 1.5 has no record",
+    options: ["wait", "re-route"],
+  });
+});
+
+it.each([
+  { scenario: "N1", missing: "1.5", rejected: 0, fresh: false, legacy: false, step: "1.5", blocked: "no record for pass 1.5" },
+  { scenario: "N2", missing: "1.5", rejected: 1, fresh: false, legacy: false, step: "1.5", blocked: retry },
+  { scenario: "N3", missing: "1.5", rejected: 3, fresh: false, legacy: false, step: "escalate to Beni", blocked: "pass 1.5 exceeded retry cap 2 after 3 failed attempts" },
+  { scenario: "N3b", missing: "1.5", rejected: 3, fresh: true, legacy: false, step: "escalate to Beni", blocked: "pass 1.5 exceeded retry cap 2 after 3 failed attempts" },
+  { scenario: "N4", missing: "3", rejected: 1, fresh: false, legacy: true, step: "2.5", blocked: needsV12 },
+  { scenario: "N5", missing: "3", rejected: 3, fresh: false, legacy: true, step: "2.5", blocked: needsV12 },
+  { scenario: "N6", missing: "3", rejected: 3, fresh: false, legacy: false, step: "escalate to Beni", blocked: "pass 3 exceeded retry cap 2 after 3 failed attempts" },
+])("$scenario routes the first unrecorded pass and preserves schema and retry priority", async ({
+  missing, rejected, fresh, legacy, step, blocked,
+}) => {
+  const records = replayPasses.slice(0, 6).flatMap((pass) => {
+    if (pass === missing) {
+      return Array.from({ length: rejected }, () => record(pass, {
+        findings: [{ ...settledFinding, severity: "high" }],
+      }));
+    }
+    if (pass === "3") return fresh ? [record(pass, { findings: [settledFinding] })] : [];
+    if (pass === "2") return [record(pass, { findings: [contestedFinding] })];
+    if (pass === "2.5") return [(legacy ? legacyRecord : record)(pass, { findings: [contestedFinding] })];
+    return [record(pass, { findings: pass === "1" ? [settledFinding] : [] })];
+  });
+  const { gh } = world({ records, allPasses: replayPasses, configure(config) {
+    config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
+  } });
+  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step, blocked });
+});
+
+it.each([
+  { scenario: "G1", gate: false, legacy: true, exec: false, settled: true, step: "exec", blocked: "no record for pass exec" },
+  { scenario: "G2", gate: false, legacy: true, exec: true, settled: true, step: "authorize", blocked: "no gate configured" },
+  { scenario: "G3", gate: false, legacy: false, exec: false, settled: true, step: "exec", blocked: "no record for pass exec" },
+  { scenario: "G4", gate: true, legacy: true, exec: false, settled: true, step: "2.5", blocked: needsV12 },
+  { scenario: "no gate with an unsettled ruling", gate: false, legacy: true, exec: false, settled: false, step: "3", blocked: "contested finding F1 needs a ruling in pass 3" },
+])("$scenario routes schema refusals only when a gate is configured", async ({
+  gate, legacy, exec, settled, step, blocked,
+}) => {
+  const records = replayPasses.slice(0, exec ? 7 : 6).map((pass) => (legacy ? legacyRecord : record)(pass, {
+    findings: pass === "3" && settled ? [settledFinding] : pass === "2.5" ? [contestedFinding] : [],
+  }));
+  const { gh } = world({ records, allPasses: replayPasses, configure(config) {
+    config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
+    if (!gate) delete config.gate;
+  } });
+  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step, blocked });
+});
+
+it("routes a legacy synthesis when a gate exists without allowed_changes", async () => {
+  const records = replayPasses.map((pass) => (pass === "2.5" ? legacyRecord : record)(pass));
+  const { gh } = world({ records, allPasses: replayPasses, configure(config) {
+    config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
+    delete config.gate!.allowed_changes;
+  } });
+  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step: "2.5", blocked: needsV12 });
+  expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject({
+    ok: false, items: [{ rule: "config", message: "config.gate.allowed_changes is required" }],
   });
 });
 

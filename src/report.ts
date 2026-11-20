@@ -64,10 +64,11 @@ function commentOf(pass: PassState): string | null {
 function nextStep(state: ReviewState, firstOpen: PassState | undefined): StatusView["next"] {
   const ruling = checkRuling(state);
   // Schema items are in configured order. A finding always needs the ruling seat.
-  const schema = ruling?.schema[0];
+  const schema = state.config.gate ? ruling?.schema[0] : undefined;
   const issue = schema ?? ruling?.findings[0];
   const pass = schema ? state.passes.find(({ id }) => id === schema.pass) : ruling?.pass;
-  if (issue && pass && pass.outcome.kind !== "rejected") {
+  if (issue && pass && (!firstOpen || state.passes.indexOf(firstOpen) > state.passes.indexOf(pass)
+      || (firstOpen === pass && firstOpen.outcome.kind === "absent"))) {
     const { id, seat, role } = pass;
     return { step: id, seat, role, blocked: issue.message, options: null };
   }

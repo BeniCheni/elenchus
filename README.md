@@ -130,10 +130,12 @@ posted after it. The historical v1.1 replay records on PR 1 therefore fail autho
 Schema v1.2 accepts `blocking`, `should-fix` and `note`. A finding blocking in either
 record needs an effective status of `fixed` or `killed`. The ruling supplies the status
 when it names the ID. Otherwise the synthesis supplies it. Other contested findings need
-a status other than `contested`. `status` names the pass that needs a v1.2 record when
-authorization refuses a record for its schema. It sends the review to the ruling pass when
-the ruling is missing, stale or leaves findings unsettled. `status` makes no head compare,
-so a re-read that `check` requires comes before the pass `status` names.
+a status other than `contested`. When a gate is configured, `status` names the pass that
+needs a v1.2 record for authorization. Only `authorize` checks whether the gate meets its
+configuration requirements. After any earlier pass without a valid record, `status` sends
+the review to the ruling pass when the ruling is missing, stale or leaves findings unsettled.
+`status` makes no head compare, so a re-read that `check` requires comes before the pass
+`status` names.
 A same-SHA replacement under schema
 v1.2 must precede any standing
 record from a later configured pass. `authorize` reports accepted replacements with both
