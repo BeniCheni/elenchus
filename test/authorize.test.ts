@@ -554,7 +554,19 @@ it.each([
   expect(buildStatus(state).next).toMatchObject({ step: "authorize", blocked: "authorization required" });
 });
 
-it.each([
+type CarryCase = {
+  scenario: string;
+  side: "ruling" | "synthesis";
+  source: string;
+  id: string;
+  namedIn?: string[];
+  earlierReread: boolean;
+  sourcePass?: "1" | "2.5" | "3";
+  kind?: "legacy" | "correction" | "replaced" | "returning";
+  raised?: Pick<SeatRecord["findings"][number], "severity" | "status">;
+};
+
+it.each(([
   { scenario: "SX7", side: "ruling", source: "an opener ID", id: "F1", namedIn: ["1", "2", "2.5"], earlierReread: false },
   { scenario: "SZ2a", side: "ruling", source: "a pass 2 ID", id: "F2", namedIn: ["2", "2.5"], earlierReread: false },
   { scenario: "SZ2b", side: "ruling", source: "a synthesis ID", id: "F3", namedIn: ["2.5"], earlierReread: false },
@@ -563,22 +575,56 @@ it.each([
   { scenario: "SM5", side: "ruling", source: "a pass 1.5 ID", id: "F6", namedIn: ["1.5"], earlierReread: false },
   { scenario: "SM5-0", side: "ruling", source: "a pass 0 ID", id: "F7", namedIn: ["0"], earlierReread: false },
   { scenario: "SM5-exec", side: "ruling", source: "an executor ID", id: "F8", namedIn: ["exec"], earlierReread: true },
-])("$scenario requires the $side re-read to carry $source raised to blocking", async ({ side, id, namedIn, earlierReread }) => {
+  { scenario: "SM26", side: "synthesis", source: "an earlier ruling re-read's ID", id: "F26", sourcePass: "3", earlierReread: true },
+  { scenario: "SM29a", side: "synthesis", source: "a legacy ruling's ID", id: "F30", kind: "legacy", earlierReread: false },
+  { scenario: "SM29b", side: "synthesis", source: "a replaced ruling's ID", id: "F31", kind: "replaced", earlierReread: false },
+  { scenario: "SM27a", side: "ruling", source: "an earlier ruling re-read's note", id: "F27", earlierReread: true, raised: { severity: "note", status: "open" } },
+  { scenario: "SM27b", side: "ruling", source: "an earlier ruling re-read's blocking ID", id: "F28", earlierReread: true, raised: { severity: "blocking", status: "fixed" } },
+  // Ruling 4 covers the remaining reachable source rounds.
+  { scenario: "CarryOpenerReread", side: "synthesis", source: "the opener re-read's ID", id: "F33", sourcePass: "1", earlierReread: true },
+  { scenario: "CarryOpenerCorrection", side: "synthesis", source: "the opener correction's ID", id: "F34", sourcePass: "1", kind: "correction", earlierReread: false },
+  { scenario: "CarryReplacedSynthesis", side: "synthesis", source: "a replaced synthesis's ID", id: "F36", sourcePass: "2.5", kind: "replaced", earlierReread: false },
+  { scenario: "CarryRulingCorrectionBefore", side: "synthesis", source: "a ruling correction's ID", id: "F37", kind: "correction", earlierReread: false },
+  { scenario: "CarryReturningRulingBefore", side: "synthesis", source: "a ruling ID at the revisited range", id: "F38", kind: "returning", earlierReread: false },
+  { scenario: "CarryReplacedRulingAfter", side: "ruling", source: "a replaced ruling's ID", id: "F39", kind: "replaced", earlierReread: false },
+] satisfies CarryCase[]).map((row: CarryCase) => ({
+  ...row,
+  description: row.raised ? `marked ${row.raised.status}` : "raised to blocking",
+})))("$scenario requires the $side re-read to carry $source $description", async ({
+  side, id, namedIn = [], earlierReread, sourcePass = side === "synthesis" && earlierReread ? "2.5" : "3",
+  kind, raised = { severity: "blocking", status: "open" },
+}) => {
   const note = { id, severity: "note", status: "open" } as const;
-  const blocking = { ...note, severity: "blocking" };
   const pass = side === "synthesis" ? "2.5" : "3";
-  const records = replayPasses.slice(0, 5).map((pass) => record(pass, {
-    findings: namedIn.includes(pass) ? [note] : [],
-  }));
+  const finding = { id, ...raised };
+  const atSecondHead = { input_sha: rereadHead, output_sha: rereadHead };
+  const usesLegacy = kind === "legacy" || kind === "returning";
+  const source = (usesLegacy ? legacyRecord : record)(sourcePass, {
+    findings: [finding],
+    ...(earlierReread || kind === "returning" ? atSecondHead : {}),
+    ...(earlierReread ? { reread: true } : {}),
+  });
+  const opener = sourcePass === "1";
+  const records = replayPasses.slice(0, 6).flatMap((pass) => {
+    if (pass === sourcePass && !earlierReread) {
+      if (kind === "correction") return [record(pass), source];
+      if (kind === "replaced") return [source, record(pass)];
+      if (kind === "returning") return [source, legacyRecord(pass)];
+      return [source];
+    }
+    const carriesOpener = opener && !earlierReread && pass === "2";
+    return [record(pass, { findings: carriesOpener ? [finding] : namedIn.includes(pass) ? [note] : [] })];
+  });
   const execFindings = namedIn.includes("exec") ? [note] : [];
-  records.push(
-    record("3", { findings: earlierReread ? [] : [blocking] }),
-    record("exec", { output_sha: rereadHead, commits: [rereadHead], findings: execFindings }),
-  );
+  records.push(record("exec", { output_sha: rereadHead, commits: [rereadHead], findings: execFindings }));
   const head = earlierReread ? thirdHead : rereadHead;
   if (earlierReread) {
+    if (side === "synthesis" && sourcePass === "3") {
+      records.push(record("2.5", { ...atSecondHead, reread: true }));
+    }
+    records.push(source);
+    if (opener) records.push(record("2", { ...atSecondHead, reread: true, findings: [finding] }));
     records.push(
-      record(pass, { reread: true, input_sha: rereadHead, output_sha: rereadHead, findings: [blocking] }),
       record("exec", { reread: true, input_sha: rereadHead, output_sha: head, commits: [head], findings: execFindings }),
     );
   }
@@ -592,7 +638,8 @@ it.each([
   });
   const carry = expect.objectContaining({
     severity: "fail", rule: "finding-carry", pass, finding: id,
-    message: `finding ${id} from pass ${pass} record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${earlierReread ? 8 : 6} is missing`,
+    message: opener ? `finding ${id} opened in pass 1 is missing`
+      : `finding ${id} from pass ${sourcePass} record https://github.com/BeniCheni/elenchus/pull/1#issuecomment-${records.indexOf(source) + 1} is missing`,
   });
   const check = buildCheck(await loadReview(gh, repo, 1));
   expect(check.filter(({ severity }) => severity === "fail")).toEqual([carry]);
@@ -807,7 +854,15 @@ const unknownConfigKeyLocations: [string, string, (config: Config) => object][] 
   ["handoff", "config.handoff", (config) => config.handoff!],
 ];
 
-it.each([
+type ConfigSplitCase = {
+  scenario: string;
+  dryRun: boolean;
+  change: (gate: GateConfig, config: Config) => void;
+  message: string;
+  currentSchema?: boolean;
+};
+
+it.each(([
   {
     scenario: "with empty required_checks", dryRun: true,
     change(gate: GateConfig) { gate.required_checks = []; },
@@ -833,13 +888,31 @@ it.each([
     change(_gate: GateConfig, config: Config) { Object.assign(target(config), { unexpected: true }); },
     message: `unknown key ${location}.unexpected`,
   })),
-])("routes a legacy synthesis when a gate exists $scenario", async ({ dryRun, change, message }) => {
-  const records = replayPasses.map((pass) => (pass === "2.5" ? legacyRecord : record)(pass));
-  const { gh } = world({ records, allPasses: replayPasses, configure(config) {
+  {
+    scenario: "with an unknown top-level key (SM28)", dryRun: true, currentSchema: true,
+    change(_gate: GateConfig, config: Config) { Object.assign(config, { unexpected: true }); },
+    message: "unknown key config.unexpected",
+  },
+] satisfies ConfigSplitCase[]).map((row: ConfigSplitCase) => ({
+  ...row,
+  route: row.currentSchema ? "to authorize" : "a legacy synthesis",
+})))("routes $route when a gate exists $scenario", async ({ dryRun, change, message, currentSchema }) => {
+  const records = replayPasses.map((pass) => (pass === "2.5" && !currentSchema ? legacyRecord : record)(pass));
+  const configure = (config: Config) => {
     config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
+  };
+  const { gh } = world({ records, allPasses: replayPasses, configure(config) {
+    configure(config);
     change(config.gate!, config);
   } });
-  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step: "2.5", blocked: needsV12 });
+  const next = buildStatus(await loadReview(gh, repo, 1)).next;
+  if (currentSchema) {
+    const control = world({ records, allPasses: replayPasses, configure });
+    expect(next).toMatchObject({ step: "authorize", blocked: "authorization required" });
+    expect(next).toEqual(buildStatus(await loadReview(control.gh, repo, 1)).next);
+  } else {
+    expect(next).toMatchObject({ step: "2.5", blocked: needsV12 });
+  }
   const refusal = { ok: false, items: [{ rule: "config", message }] };
   if (dryRun) {
     expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject(refusal);
