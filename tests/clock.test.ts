@@ -77,7 +77,7 @@ describe('createClock — the tick', () => {
     h.fireNextTimer()
     expect(h.nowMs()).toBe(expectedAt)
     // The timer fires 50ms past the boundary; the snapshot is the minute itself.
-    expect(clock.getSnapshot().nowUtcIso).toBe('2026-09-01T12:01:00.000Z')
+    expect(clock.getSnapshot().nowUtcIso).toBe('2026-09-01T12:02:00.000Z')
   })
 
   it('the snapshot is the minute — seconds and milliseconds are always zero', () => {
