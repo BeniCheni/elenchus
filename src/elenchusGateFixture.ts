@@ -1,1 +1,1 @@
-export const reviewGateFixture = "source-change checkpoint";
+export const reviewGateFixture = "executor source-change checkpoint";
