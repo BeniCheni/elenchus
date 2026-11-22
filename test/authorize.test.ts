@@ -587,6 +587,27 @@ it.each(([
   { scenario: "CarryRulingCorrectionBefore", side: "synthesis", source: "a ruling correction's ID", id: "F37", kind: "correction", earlierReread: false },
   { scenario: "CarryReturningRulingBefore", side: "synthesis", source: "a ruling ID at the revisited range", id: "F38", kind: "returning", earlierReread: false },
   { scenario: "CarryReplacedRulingAfter", side: "ruling", source: "a replaced ruling's ID", id: "F39", kind: "replaced", earlierReread: false },
+  // Eighth Pass 3, ruling 3: isolate each cell against the on-time, blocking, open source.
+  { scenario: "CarryOpenerOnTime", side: "synthesis", source: "an on-time opener ID", id: "F40", sourcePass: "1", earlierReread: false },
+  { scenario: "CarryOpenerLegacy", side: "synthesis", source: "a legacy opener ID", id: "F41", sourcePass: "1", kind: "legacy", earlierReread: false },
+  { scenario: "CarryOpenerShouldFix", side: "synthesis", source: "an opener should-fix ID", id: "F42", sourcePass: "1", earlierReread: false, raised: { severity: "should-fix", status: "open" } },
+  { scenario: "CarryOpenerFixed", side: "synthesis", source: "an opener ID", id: "F44", sourcePass: "1", earlierReread: false, raised: { severity: "blocking", status: "fixed" } },
+  { scenario: "CarryOpenerContested", side: "synthesis", source: "an opener ID", id: "F45", sourcePass: "1", earlierReread: false, raised: { severity: "blocking", status: "contested" } },
+  { scenario: "CarrySynthesisCorrection", side: "synthesis", source: "a synthesis correction's ID", id: "F46", sourcePass: "2.5", kind: "correction", earlierReread: false },
+  { scenario: "CarrySynthesisLegacy", side: "synthesis", source: "an older legacy synthesis ID", id: "F47", sourcePass: "2.5", kind: "legacy", earlierReread: false },
+  { scenario: "CarrySynthesisShouldFix", side: "synthesis", source: "a synthesis should-fix ID", id: "F48", sourcePass: "2.5", earlierReread: false, raised: { severity: "should-fix", status: "open" } },
+  { scenario: "CarrySynthesisNote", side: "synthesis", source: "a synthesis note", id: "F49", sourcePass: "2.5", earlierReread: false, raised: { severity: "note", status: "open" } },
+  { scenario: "CarrySynthesisFixed", side: "synthesis", source: "a synthesis ID", id: "F50", sourcePass: "2.5", earlierReread: false, raised: { severity: "blocking", status: "fixed" } },
+  { scenario: "CarrySynthesisContested", side: "synthesis", source: "a synthesis ID", id: "F51", sourcePass: "2.5", earlierReread: false, raised: { severity: "blocking", status: "contested" } },
+  { scenario: "CarryBeforeShouldFix", side: "synthesis", source: "an earlier ruling should-fix ID", id: "F52", earlierReread: false, raised: { severity: "should-fix", status: "open" } },
+  { scenario: "CarryBeforeNote", side: "synthesis", source: "an earlier ruling note", id: "F53", earlierReread: false, raised: { severity: "note", status: "open" } },
+  { scenario: "CarryBeforeFixed", side: "synthesis", source: "an earlier ruling ID", id: "F54", earlierReread: false, raised: { severity: "blocking", status: "fixed" } },
+  { scenario: "CarryBeforeContested", side: "synthesis", source: "an earlier ruling ID", id: "F55", earlierReread: false, raised: { severity: "blocking", status: "contested" } },
+  { scenario: "CarryAfterLegacy", side: "ruling", source: "an older legacy ruling ID", id: "F56", kind: "legacy", earlierReread: false },
+  { scenario: "CarryAfterShouldFix", side: "ruling", source: "an earlier ruling should-fix ID", id: "F57", earlierReread: false, raised: { severity: "should-fix", status: "open" } },
+  { scenario: "CarryAfterNote", side: "ruling", source: "an earlier ruling note", id: "F58", earlierReread: false, raised: { severity: "note", status: "open" } },
+  { scenario: "CarryAfterFixed", side: "ruling", source: "an earlier ruling ID", id: "F59", earlierReread: false, raised: { severity: "blocking", status: "fixed" } },
+  { scenario: "CarryAfterContested", side: "ruling", source: "an earlier ruling ID", id: "F60", earlierReread: false, raised: { severity: "blocking", status: "contested" } },
 ] satisfies CarryCase[]).map((row: CarryCase) => ({
   ...row,
   description: row.raised ? `marked ${row.raised.status}` : "raised to blocking",
@@ -860,7 +881,12 @@ type ConfigSplitCase = {
   change: (gate: GateConfig, config: Config) => void;
   message: string;
   currentSchema?: boolean;
+  records?: SeatRecord[];
+  docsPush?: boolean;
+  expectedNext?: { step: string; blocked: string };
 };
+
+const rejectedRuling = record("3", { findings: [{ id: "F1", severity: "high", status: "open" }] });
 
 it.each(([
   {
@@ -893,22 +919,65 @@ it.each(([
     change(_gate: GateConfig, config: Config) { Object.assign(config, { unexpected: true }); },
     message: "unknown key config.unexpected",
   },
+  // Eighth Pass 3, ruling 3: all remaining nextStep arms, with the SM28 control.
+  ...[
+    {
+      scenario: "on a ruling finding",
+      records: replayPasses.map((pass) => record(pass, pass === "2.5" ? {
+        findings: [{ id: "F1", severity: "blocking", status: "open" }],
+      } : {})),
+      expectedNext: { step: "3", blocked: "blocking finding F1 must be fixed or killed (status: open)" },
+    },
+    {
+      scenario: "past the retry cap",
+      records: [...replayPasses.slice(0, 5).map((pass) => record(pass)), rejectedRuling, rejectedRuling, rejectedRuling],
+      expectedNext: { step: "escalate to Beni", blocked: "pass 3 exceeded retry cap 2 after 3 failed attempts" },
+    },
+    {
+      scenario: "within the retry cap",
+      records: [...replayPasses.slice(0, 5).map((pass) => record(pass)), rejectedRuling],
+      expectedNext: { step: "3", blocked: retry },
+    },
+    {
+      scenario: "in progress",
+      records: replayPasses.slice(0, 6).map((pass) => record(pass)),
+      docsPush: true,
+      expectedNext: { step: "exec", blocked: "commits pushed after pass 3 and pass exec has no record" },
+    },
+    {
+      scenario: "without a record",
+      records: replayPasses.slice(0, 3).map((pass) => record(pass)),
+      expectedNext: { step: "2", blocked: "no record for pass 2" },
+    },
+  ].map((row) => ({
+    ...row,
+    scenario: `${row.scenario} with an unknown key`,
+    dryRun: true,
+    change(_gate: GateConfig, config: Config) { Object.assign(config, { unexpected: true }); },
+    message: "unknown key config.unexpected",
+  })),
 ] satisfies ConfigSplitCase[]).map((row: ConfigSplitCase) => ({
   ...row,
-  route: row.currentSchema ? "to authorize" : "a legacy synthesis",
-})))("routes $route when a gate exists $scenario", async ({ dryRun, change, message, currentSchema }) => {
-  const records = replayPasses.map((pass) => (pass === "2.5" && !currentSchema ? legacyRecord : record)(pass));
+  route: row.expectedNext ? `to ${row.expectedNext.step}` : row.currentSchema ? "to authorize" : "a legacy synthesis",
+})))("routes $route when a gate exists $scenario", async ({
+  dryRun, change, message, currentSchema, expectedNext, docsPush,
+  records = replayPasses.map((pass) => (pass === "2.5" && !currentSchema ? legacyRecord : record)(pass)),
+}) => {
+  const options = {
+    records, allPasses: replayPasses,
+    ...(docsPush ? { head: rereadHead, changedPath: "docs/notes.md", boundary: "2.5" } : {}),
+  };
   const configure = (config: Config) => {
     config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
   };
-  const { gh } = world({ records, allPasses: replayPasses, configure(config) {
+  const { gh } = world({ ...options, configure(config) {
     configure(config);
     change(config.gate!, config);
   } });
   const next = buildStatus(await loadReview(gh, repo, 1)).next;
-  if (currentSchema) {
-    const control = world({ records, allPasses: replayPasses, configure });
-    expect(next).toMatchObject({ step: "authorize", blocked: "authorization required" });
+  if (expectedNext || currentSchema) {
+    const control = world({ ...options, configure });
+    expect(next).toMatchObject(expectedNext ?? { step: "authorize", blocked: "authorization required" });
     expect(next).toEqual(buildStatus(await loadReview(control.gh, repo, 1)).next);
   } else {
     expect(next).toMatchObject({ step: "2.5", blocked: needsV12 });
