@@ -106,14 +106,24 @@ describe("handoff", () => {
       .rejects.toThrow("config.handoff.merge_command must include {merge_body}");
   });
 
-  it("refuses incomplete commit attribution", async () => {
+  it.each([{ total_commits: 0 }, { commits: [], total_commits: 2 }])("refuses incomplete commit attribution %j", async (range) => {
     const inner = gh({ headVersion: "2", baseVersion: "1" });
     const partial: GhClient = { async get(apiPath, options) {
-      if (apiPath.includes("/compare/") && options?.paginate) return { commits: [], total_commits: 2 };
+      if (apiPath.includes("/compare/") && options?.paginate) return range;
       return inner.get(apiPath, options);
     } };
     await expect(buildHandoff(partial, "BeniCheni/elenchus", 1, kickoffConfig(), "Release"))
       .rejects.toThrow("incomplete PR comparison");
+  });
+
+  it("prints absent legacy route evidence and ends at the last pass when nobody has a trailer", async () => {
+    const config = kickoffConfig();
+    config.passes = [{ id: "0", role: "brief", seat: "operator" }];
+    config.vendors.claude!.authors = [];
+    const record = { ...seat("0"), model: { requested: null, observed: null } };
+    const block = await buildHandoff(gh({ headVersion: "2", baseVersion: "1", records: [record] }),
+      "BeniCheni/elenchus", 1, config, "Release");
+    expect(block).toContain("--body 'Pass 0 — brief, seat operator — Claude Code, model unspecified requested (observed: null, source: absent), effort xhigh' &&\n");
   });
 
   it("refuses a review whose check fails, and a pass with no record", async () => {
