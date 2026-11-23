@@ -10,11 +10,13 @@ import * as gitModule from "../src/git.js";
 import { assertGitAllowed, type GitScope } from "../src/git.js";
 import { loadReview } from "../src/load.js";
 import { defaultRun, openSeatMessage, prepareSeat, prepGitEnv, type Runner } from "../src/prep.js";
+import { seatCredentialArgs, withSeatToken } from "../src/seat-credentials.js";
 import { buildCheck } from "../src/report.js";
 import type { Config, GhComment, SeatRecord } from "../src/types.js";
-import { comment, fenced, graphGh, kickoffConfig, type Node } from "./graph.js";
+import { comment, fenced, graphGh, kickoffConfig, replayConfig, type Node } from "./graph.js";
 
 const dirs: string[] = [];
+const seatService = "elenchus test seat";
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -99,7 +101,7 @@ function client(head: string, records: SeatRecord[], baseSha = head): GhClient {
           base: { sha: baseSha, ref: "main", repo: { full_name: "BeniCheni/elenchus" } },
         };
       }
-      if (apiPath.endsWith("/commits/main")) return { sha: baseSha };
+      if (apiPath.endsWith("/commits/heads%2Fmain")) return { sha: baseSha };
       if (apiPath.includes("/comments")) return comments;
       if (apiPath.includes("/compare/")) return { status: "ahead", total_commits: 0, commits: [], files: [] };
       throw new Error(`unexpected GET ${apiPath}`);
@@ -111,6 +113,7 @@ function scopeFor(root: string, pass: string): GitScope {
   const resolved = path.resolve(root);
   return {
     root: resolved,
+    seatKeychainService: seatService,
     places: [
       path.join(resolved, "BeniCheni__elenchus.git"),
       path.join(resolved, "BeniCheni/elenchus", `pr-3-pass-${pass}`),
@@ -157,8 +160,10 @@ async function prep(over: {
   model?: string;
   effort?: string;
   symlinkOutside?: string;
+  configOverride?: Config;
 }) {
   return prepareSeat({
+    seatKeychainService: seatService,
     gh: client(over.head, over.records ?? []),
     repo: "BeniCheni/elenchus",
     pr: 3,
@@ -168,7 +173,7 @@ async function prep(over: {
     effort: over.effort ?? route.effort,
     confirmedBy: route.confirmedBy,
     root: over.root,
-    config: config(),
+    config: over.configOverride ?? config(),
     cloneUrl: over.url,
     run: runner(over.root, over.pass ?? "1", over.symlinkOutside),
   });
@@ -232,6 +237,7 @@ describe("prep refusals", () => {
     ).rejects.toThrow(/effort no-such-effort is not in the claude table/);
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -262,7 +268,7 @@ describe("prep refusals", () => {
       records: [seat("0", made.second)],
     });
     expect(codex.launch).toBe(
-      `cd '${codex.seat}' && '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex' -m 'gpt-6.1-sol' -c 'model_reasoning_effort=low' --sandbox 'workspace-write'`,
+      `cd '${codex.seat}' && ${withSeatToken(seatService, "'/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex' -m 'gpt-6.1-sol' -c 'model_reasoning_effort=low' --sandbox 'workspace-write'")}`,
     );
     expect(codex.profileNote).toBe("the Codex profile is not known to load");
     expect(codex.profile).toContain(".codex/rules/seat.rules");
@@ -275,7 +281,7 @@ describe("prep refusals", () => {
       effort: "low",
       records: [seat("0", made.second)],
     });
-    expect(cursor.launch).toBe(`cd '${cursor.seat}' && agent --model 'grok-4.7-low'`);
+    expect(cursor.launch).toBe(`cd '${cursor.seat}' && ${withSeatToken(seatService, "agent --model 'grok-4.7-low'")}`);
     await expect(
       prep({
         head: made.second,
@@ -307,7 +313,7 @@ describe("prep refusals", () => {
     const root = path.join(made.dir, "seats");
     const report = await prep({ head: made.second, url: made.url, root, records: [seat("0", made.second)] });
     expect(report.head).toBe(made.second);
-    expect(report.launch).toBe(`cd '${report.seat}' && claude --model 'claude-fable-5-2' --effort 'xhigh'`);
+    expect(report.launch).toBe(`cd '${report.seat}' && ${withSeatToken(seatService, "claude --model 'claude-fable-5-2' --effort 'xhigh'")}`);
     expect(report.launch).not.toContain("--permission-mode");
     const stamp = JSON.parse(readFileSync(report.stamp, "utf8")) as {
       by_hand: boolean;
@@ -359,6 +365,7 @@ describe("prep refusals", () => {
     const made = origin();
     const planRoot = path.join(made.dir, "seats-plan");
     const readOnly = await prepareSeat({
+      seatKeychainService: seatService,
       gh: client(made.second, [seat("0", made.second), seat("1", made.second)]),
       repo: "BeniCheni/elenchus",
       pr: 3,
@@ -373,7 +380,7 @@ describe("prep refusals", () => {
       run: runner(planRoot, "1.5"),
     });
     expect(readOnly.launch).toBe(
-      `cd '${readOnly.seat}' && claude --model 'claude-fable-5-2' --effort 'xhigh' --permission-mode plan`,
+      `cd '${readOnly.seat}' && ${withSeatToken(seatService, "claude --model 'claude-fable-5-2' --effort 'xhigh' --permission-mode plan")}`,
     );
 
     const src = path.join(made.dir, "src");
@@ -401,6 +408,7 @@ describe("prep refusals", () => {
       url: made.url,
       root: path.join(made.dir, "seats"),
       model: "Opus 5.5",
+      configOverride: { ...config(), vendors: replayConfig().vendors },
       records: [seat("0", made.second)],
     });
     expect(report.launch).toContain("claude --model 'Opus 5.5' --effort 'xhigh'");
@@ -418,6 +426,7 @@ describe("prep refusals", () => {
     };
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: forked,
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -467,6 +476,7 @@ describe("prep refusals", () => {
     };
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -480,6 +490,7 @@ describe("prep refusals", () => {
     ).rejects.toThrow(/npm ci failed/);
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -503,6 +514,7 @@ describe("prep refusals", () => {
     };
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -575,6 +587,7 @@ describe("prep refusals", () => {
     outside.installs = [{ dir: "..", lockfile: "package-lock.json" }];
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -591,6 +604,7 @@ describe("prep refusals", () => {
     escaped.installs = [{ dir: ".", lockfile: "../package-lock.json" }];
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -612,6 +626,7 @@ describe("prep refusals", () => {
     };
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -628,6 +643,7 @@ describe("prep refusals", () => {
     bareConfig.installs = [];
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -643,6 +659,7 @@ describe("prep refusals", () => {
     bareConfig.forbidden = [];
     await expect(
       prepareSeat({
+      seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -739,6 +756,7 @@ describe("prep refusals", () => {
     process.env.GIT_CONFIG_VALUE_0 = path.join(made.dir, "template");
     try {
       const report = await prepareSeat({
+    seatKeychainService: seatService,
         gh: client(made.second, [seat("0", made.second)]),
         repo: "BeniCheni/elenchus",
         pr: 3,
@@ -752,6 +770,7 @@ describe("prep refusals", () => {
       expect(existsSync(marker)).toBe(false);
       expect(calls).toHaveBeenCalled();
       await expect(defaultRun("bash", ["-c", "true"], undefined, { root, places: [] })).rejects.toThrow(/command refused: bash/);
+      await expect(defaultRun("npm", ["--version"], undefined, { root, places: [] })).rejects.toThrow(/command refused: npm/);
       const env = prepGitEnv({ PATH: "/usr/bin" });
       expect(env.GIT_CONFIG_KEY_0).toBe("core.hooksPath");
       expect(env.GIT_CONFIG_VALUE_0).toBe("/dev/null");
@@ -765,4 +784,97 @@ describe("prep refusals", () => {
       else process.env.GIT_CONFIG_VALUE_0 = saved.value;
     }
   });
+});
+
+it("uses the preceding record's confirmed route with per-field flag overrides", async () => {
+  const made = origin();
+  const root = path.join(made.dir, "seats");
+  const report = await prepareSeat({
+    seatKeychainService: seatService,
+    gh: client(made.second, [{
+      ...seat("0", made.second),
+      schema_version: "1.2",
+      next_route: {
+        runtime: "Claude Code",
+        model: "claude-fable-5-2",
+        effort: "medium",
+        recommended_by: "planner",
+        confirmed_by: "maintainer",
+      },
+    }]),
+    repo: "BeniCheni/elenchus",
+    pr: 3,
+    pass: "1",
+    runtime: "",
+    model: "",
+    effort: "high",
+    confirmedBy: "",
+    root,
+    config: config(),
+    cloneUrl: made.url,
+    run: runner(root),
+  });
+  expect(report.launch).toContain("claude --model 'claude-fable-5-2' --effort 'high'");
+  expect(JSON.parse(readFileSync(report.stamp, "utf8"))).toMatchObject({
+    runtime: "Claude Code", recommended_by: "planner", confirmed_by: "maintainer",
+    route_source: { runtime: "record", model: "record", effort: "flag", confirmed_by: "record" },
+  });
+});
+
+it("stores only the reset and the configured seat helper and reads the pull request once", async () => {
+  const made = origin();
+  const root = path.join(made.dir, "seats");
+  const underlying = client(made.second, [seat("0", made.second)]);
+  let pulls = 0;
+  const report = await prepareSeat({
+    seatKeychainService: seatService,
+    gh: { async get(path, options) {
+      if (path.endsWith("/pulls/3")) pulls++;
+      return underlying.get(path, options);
+    } },
+    repo: "BeniCheni/elenchus", pr: 3, pass: "1", ...route, root,
+    config: config(), cloneUrl: made.url, run: runner(root),
+  });
+  expect(pulls).toBe(1);
+  const helpers = git(report.seat, ["config", "--local", "--get-all", "credential.helper"]);
+  expect(helpers.split("\n")).toEqual(["", seatCredentialArgs("--config", seatService)[3]!.slice("credential.helper=".length), ""]);
+  expect(helpers).toContain("/usr/bin/security find-generic-password");
+  expect(report.launch).toContain("GH_TOKEN=");
+  expect(report.launch).toContain("set +x;");
+  expect(report.launch).toContain("/usr/bin/security find-generic-password");
+});
+
+it.each([undefined, "seat\nitem", "seat\ritem", "seat\0item"])("requires a single-line seat Keychain item before cloning (%j)", async (seatKeychainService) => {
+  const made = origin();
+  await expect(prepareSeat({
+    gh: client(made.second, [seat("0", made.second)]),
+    seatKeychainService,
+    repo: "BeniCheni/elenchus", pr: 3, pass: "1", ...route,
+    root: path.join(made.dir, "seats"), config: config(), cloneUrl: made.url, run: runner(path.join(made.dir, "seats")),
+  })).rejects.toThrow(/prep requires --seat-keychain-service/);
+});
+
+it("prepares the configured re-read seat at the current head and marks the stamp", async () => {
+  const made = origin();
+  const configured = config();
+  const root = path.join(made.dir, "reread-seats");
+  const records = configured.passes.map(({ id }) => seat(id, made.first));
+  const report = await prepareSeat({
+    gh: client(made.second, records, made.first), repo: "BeniCheni/elenchus", pr: 3,
+    pass: "2.5", root, config: configured, cloneUrl: made.url, seatKeychainService: seatService,
+    ...route, run: runner(root, "2.5"),
+  });
+  expect(report.head).toBe(made.second);
+  expect(JSON.parse(readFileSync(report.stamp, "utf8"))).toMatchObject({
+    expected_sha: made.second, pass: "2.5", reread: true,
+  });
+  for (const initial of [records.slice(0, 4), records]) {
+    const pass = initial.length === 4 ? "2.5" : "1";
+    const initialRoot = path.join(made.dir, `fresh-${pass}`);
+    await expect(prepareSeat({
+      gh: client(made.second, initial, made.first), repo: "BeniCheni/elenchus", pr: 3,
+      pass, root: initialRoot, config: configured, cloneUrl: made.url, seatKeychainService: seatService,
+      ...route, run: runner(initialRoot, pass),
+    })).rejects.toThrow(/head .* is not the expected/);
+  }
 });

@@ -58,3 +58,91 @@ describe("seat record schema v1.1", () => {
     expect(validateSeatRecord({ ...v1, input_sha: "abc1234" }).ok).toBe(true);
   });
 });
+
+describe("seat record schema v1.2", () => {
+  const record = {
+    ...v1,
+    findings: [{ ...v1.findings[0], severity: "note" }],
+    schema_version: "1.2",
+    input_sha: "a".repeat(40),
+    output_sha: "c".repeat(40),
+    commits: ["b".repeat(40), "c".repeat(40)],
+    pass: "independent synthesis",
+    reread: true,
+    next_route: {
+      runtime: "Codex", model: "gpt-6.1-sol", effort: "xhigh", recommended_by: "lead", confirmed_by: "maintainer",
+    },
+    model: { requested: "model", observed: null, source: "not reported" },
+    effort: { requested: "high", observed: null, source: "not reported" },
+    coverage: { total: 1, reviewed: 1, skipped: [], reviewed_paths: ["src/a.ts"] },
+  };
+
+  it("accepts repository-defined passes, a re-read, a handoff route and named paths", () => {
+    expect(validateSeatRecord(record).ok).toBe(true);
+  });
+
+  it.each(["Blocking", "BLOCKING", "blocker", " blocking", "blocking (raised at Pass 3)"])(
+    "rejects unrecognised finding severity %j (A10 to A14)",
+    (severity) => {
+      expect(validateSeatRecord({ ...record, findings: [{ ...record.findings[0], severity }] })).toMatchObject({
+        ok: false, reason: expect.stringContaining("/findings/0/severity"),
+      });
+    },
+  );
+
+  it.each([
+    { schema_version: "1.3" },
+    { input_sha: "abc1234" },
+    { output_sha: "abc1234" },
+    { commits: ["abc1234"] },
+    { pass: "" },
+    { reread: false },
+    { extra: true },
+    { next_route: { ...record.next_route, extra: true } },
+    { next_route: { ...record.next_route, confirmed_by: undefined } },
+    { coverage: { ...record.coverage, extra: true } },
+    { coverage: { ...record.coverage, reviewed_paths: ["src/a.ts", "src/a.ts"] } },
+  ])("rejects an invalid or unknown field: %j", (change) => {
+    expect(validateSeatRecord({ ...record, ...change }).ok).toBe(false);
+  });
+
+  it.each(["model", "effort"] as const)("validates the requested and observed %s independently", (field) => {
+    expect(validateSeatRecord({ ...record, [field]: { ...record[field], requested: null } }).ok).toBe(false);
+    expect(validateSeatRecord({ ...record, [field]: { ...record[field], source: undefined } }).ok).toBe(false);
+    expect(validateSeatRecord({ ...record, [field]: { ...record[field], source: "" } }).ok).toBe(false);
+    expect(validateSeatRecord({ ...record, [field]: { requested: "high", observed: "high" } }).ok).toBe(true);
+  });
+});
+
+describe("v1.2 closed object boundaries", () => {
+  const complete = {
+    ...v1,
+    findings: [{ ...v1.findings[0], severity: "note" }],
+    schema_version: "1.2",
+    input_sha: "a".repeat(40),
+    output_sha: "c".repeat(40),
+    commits: ["b".repeat(40), "c".repeat(40)],
+    session: { id: "session", log: "metadata" },
+    mode: { requested: null, observed: null },
+    next_route: { runtime: "Codex", model: "gpt-6.1-sol", effort: "xhigh", recommended_by: null, confirmed_by: null },
+    coverage: { total: 2, reviewed: 1, reviewed_paths: ["a"], skipped: [{ path: "b", reason: "deleted" }] },
+  };
+  it.each([
+    [],
+    ["session"],
+    ["model"],
+    ["effort"],
+    ["mode"],
+    ["route"],
+    ["next_route"],
+    ["coverage"],
+    ["coverage", "skipped", "0"],
+    ["findings", "0"],
+  ])("rejects an extra property at %j", (...path) => {
+    const copy = structuredClone(complete);
+    let object = copy as unknown as Record<string, unknown>;
+    for (const part of path) object = object[part] as Record<string, unknown>;
+    object.unlisted = true;
+    expect(validateSeatRecord(copy).ok).toBe(false);
+  });
+});

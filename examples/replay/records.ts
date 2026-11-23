@@ -15,7 +15,7 @@ function finding(
 function base(pass: string, over: Partial<SeatRecord>): SeatRecord {
   return {
     seat_record: 1,
-    pr: 320,
+    pr: 1,
     pass,
     runtime: "Claude Code",
     model: { requested: null, observed: null, source: "not reported" },
@@ -53,8 +53,8 @@ const pass2 = [
   finding("7", "low", "fixed", "Accept, and do it in this PR. It stayed one test file plus the five literals. Commit 0c7bdd8.", "accept"),
   finding("8", "low", "open", "Accept the observation. The copy stays out. Severity stays low.", "accept"),
   finding("9", "low", "fixed", "Accept. The assertion now reads the checked radio. Commit 97200f3.", "accept"),
-  finding("N1", "low", "fixed", "The completed-rows table said row 10 and the month half of row 11 were closed by removal, while the ranked rows still said otherwise. Fixed in 09324fb.", "accept"),
-  finding("N2", "low", "fixed", "Row 116 said, in the present tense, that Broadcast is dark whatever the OS says. Fixed in 09324fb.", "accept"),
+  finding("N1", "low", "fixed", "The completed-rows table said row 10 and the month half of row 11 were closed by removal, while the ranked rows still said otherwise. Fixed in 09324fb."),
+  finding("N2", "low", "fixed", "Row 116 said, in the present tense, that Broadcast is dark whatever the OS says. Fixed in 09324fb."),
 ];
 
 const pass25 = [
@@ -63,12 +63,12 @@ const pass25 = [
   finding("3", "medium", "fixed", "The plain suite at 0faf606 was red with ENOTEMPTY in 2 of 3 runs, and green in 3 of 3 at the head. The guard stays.", "accept"),
   finding("4", "medium", "fixed", "Read against the code. A case-insensitive search of the audited paths finds the retirement note and dated history.", "accept"),
   finding("5", "medium", "open", "git merge-tree against 7f7746f: six files. The facts hold."),
-  finding("6", "low", "contested", "The geometry reproduces to the pixel. The 360 half does not reproduce as a regression. Severity contested.", "accept-observation-contest-severity"),
-  finding("7", "low", "fixed", "The audit passes clean. Done in 0c7bdd8 and 97200f3.", "accept"),
+  finding("6", "medium, not fixed → low", "contested", "The geometry reproduces to the pixel. The 360 half does not reproduce as a regression. Severity contested.", "accept-observation-contest-severity"),
+  finding("7", "low", "fixed", "The audit passes clean. Done in 0c7bdd8 and 97200f3."),
   finding("8", "low", "open", "The copy is in both heroes. The snapshot's window runs 2026-10-14 to 2027-04-12, so today is not that state."),
-  finding("9", "low", "fixed", "With the retired lens made to decode to Ledger, the web test passes at 0faf606 and fails at the head.", "accept"),
-  finding("N1", "low", "fixed", "Pass 2, fixed in 09324fb. The ranked rows and the completed-rows table now agree.", "accept"),
-  finding("N2", "low", "fixed", "Pass 2, fixed in 09324fb. The ranked rows and the completed-rows table now agree.", "accept"),
+  finding("9", "low", "fixed", "With the retired lens made to decode to Ledger, the web test passes at 0faf606 and fails at the head."),
+  finding("N1", "low", "fixed", "Pass 2, fixed in 09324fb. The ranked rows and the completed-rows table now agree."),
+  finding("N2", "low", "fixed", "Pass 2, fixed in 09324fb. The ranked rows and the completed-rows table now agree."),
 ];
 
 export type ReplayRecord = { pass: string; firstLine: string; record: SeatRecord };
@@ -80,7 +80,7 @@ export const replayRecords: ReplayRecord[] = [
       "Transcribed by hand from docs/design-overhaul-clearing-review-prompt.md on BeniCheni/kickoff main for the elenchus replay. This is a fixture and is not a live seat.",
     record: base("0", {
       model: {
-        requested: "Opus 5.5",
+        requested: null,
         observed: "Opus 5.5",
         source: "transcribed: kickoff docs/design-overhaul-clearing-review-prompt.md:3",
       },
@@ -94,17 +94,17 @@ export const replayRecords: ReplayRecord[] = [
   {
     pass: "1",
     firstLine:
-      "Transcribed by hand from kickoff#320 comment 6880031532 for the elenchus replay. This is a fixture and is not a live seat.",
+      "Transcribed by hand from Kickoff PR 320 comment 6880031532 for the elenchus replay. This is a fixture and is not a live seat.",
     record: base("1", {
       model: {
         requested: "claude-fable-5-2",
         observed: "Fable 5.2",
-        source: "transcribed: kickoff#320 comment 6880031532",
+        source: "transcribed: Kickoff PR 320 comment 6880031532",
       },
       effort: {
         requested: "xhigh",
         observed: "Extra",
-        source: "transcribed: kickoff#320 comment 6880031532",
+        source: "transcribed: Kickoff PR 320 comment 6880031532",
       },
       route: { recommended_by: "PM", confirmed_by: null },
       input_sha: "0faf606",
@@ -128,7 +128,7 @@ export const replayRecords: ReplayRecord[] = [
       "Transcribed by hand from docs/design-overhaul-clearing-rebuttal-prompt.md on BeniCheni/kickoff main for the elenchus replay. This is a fixture and is not a live seat.",
     record: base("1.5", {
       model: {
-        requested: "Opus 5.5",
+        requested: null,
         observed: "Opus 5.5",
         source: "transcribed: kickoff docs/design-overhaul-clearing-rebuttal-prompt.md:3",
       },
@@ -141,18 +141,18 @@ export const replayRecords: ReplayRecord[] = [
   {
     pass: "2",
     firstLine:
-      "Transcribed by hand from kickoff#320 comment 6882281451 for the elenchus replay. This is a fixture and is not a live seat.",
+      "Transcribed by hand from Kickoff PR 320 comment 6882281451 for the elenchus replay. This is a fixture and is not a live seat.",
     record: base("2", {
       runtime: "Cursor",
       model: {
         requested: "grok-4.7-xhigh",
         observed: "Grok 4.7 Extra High",
-        source: "transcribed: kickoff#320 comment 6882281451",
+        source: "transcribed: Kickoff PR 320 comment 6882281451",
       },
       effort: {
         requested: "xhigh",
         observed: "Extra High",
-        source: "transcribed: kickoff#320 comment 6882281451",
+        source: "transcribed: Kickoff PR 320 comment 6882281451",
       },
       route: { recommended_by: "PM", confirmed_by: "Beni" },
       input_sha: "89b8067",
@@ -173,17 +173,17 @@ export const replayRecords: ReplayRecord[] = [
   {
     pass: "2.5",
     firstLine:
-      "Transcribed by hand from kickoff#320 comment 6882900669 for the elenchus replay. This is a fixture and is not a live seat. The brief that routed it is docs/design-overhaul-clearing-synthesis-prompt.md.",
+      "Transcribed by hand from Kickoff PR 320 comment 6882900669 for the elenchus replay. This is a fixture and is not a live seat. The brief that routed it is docs/design-overhaul-clearing-synthesis-prompt.md.",
     record: base("2.5", {
       model: {
         requested: "claude-fable-5-2",
         observed: "Fable 5.2",
-        source: "transcribed: kickoff#320 comment 6882900669",
+        source: "transcribed: Kickoff PR 320 comment 6882900669",
       },
       effort: {
         requested: "xhigh",
         observed: "Extra",
-        source: "transcribed: kickoff#320 comment 6882900669",
+        source: "transcribed: Kickoff PR 320 comment 6882900669",
       },
       route: { recommended_by: "PM", confirmed_by: null },
       input_sha: "09324fb",
@@ -224,7 +224,7 @@ export const replayRecords: ReplayRecord[] = [
   {
     pass: "exec",
     firstLine:
-      "Transcribed by hand from kickoff#320 comment 6884589607 for the elenchus replay. This is a fixture and is not a live seat. That comment calls itself Pass 3; schema v1.1 names this pass exec.",
+      "Transcribed by hand from Kickoff PR 320 comment 6884589607 for the elenchus replay. This is a fixture and is not a live seat. That comment calls itself Pass 3; schema v1.1 names this pass exec.",
     record: base("exec", {
       runtime: "Cursor",
       model: {
@@ -243,7 +243,6 @@ export const replayRecords: ReplayRecord[] = [
         "Root and web production builds again after those two commits.",
         "Studio's suite.",
         "The Cursor browser pane.",
-        "vercel-smoke was left red until main carries the script.",
       ],
     }),
   },
@@ -252,3 +251,9 @@ export const replayRecords: ReplayRecord[] = [
 export function commentBody(entry: ReplayRecord): string {
   return `${entry.firstLine}\n\n\`\`\`json\n${JSON.stringify(entry.record, null, 2)}\n\`\`\`\n`;
 }
+
+/** The preparation fixture carries the same first brief on its own pull request. */
+export const prepReplayRecord: ReplayRecord = {
+  ...replayRecords[0]!,
+  record: { ...replayRecords[0]!.record, pr: 3 },
+};

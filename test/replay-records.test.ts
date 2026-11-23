@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { commentBody, replayRecords } from "../examples/replay/records.js";
+import { commentBody, prepReplayRecord, replayRecords } from "../examples/replay/records.js";
 import { formatCheck, formatStatus } from "../src/format.js";
 import { loadReview } from "../src/load.js";
 import { extractRecord } from "../src/records.js";
 import { buildCheck, buildStatus } from "../src/report.js";
 import { validateSeatRecord } from "../src/schema.js";
 import type { SeatRecord } from "../src/types.js";
-import { comment, graphGh, kickoffConfig, type Node } from "./graph.js";
+import { comment, graphGh, replayConfig, type Node } from "./graph.js";
 
 const full = {
   ddd9a37: "ddd9a37efc68fc09709bda0c48895f952d805233",
@@ -64,13 +64,13 @@ const nodes: Record<string, Node> = {
 
 async function checkRecords(records: SeatRecord[], head: string, baseSha: string): Promise<string> {
   const comments = records.map((record, index) =>
-    comment(index + 1, `${replayRecords[0]?.firstLine ?? "note"}\n\n\`\`\`json\n${JSON.stringify(record, null, 2)}\n\`\`\`\n`, `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`),
+    comment(index + 1, `${replayRecords[0]?.firstLine ?? "note"}\n\n\`\`\`json\n${JSON.stringify({ ...record, pr: 1 }, null, 2)}\n\`\`\`\n`, `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`),
   );
   const state = await loadReview(
     graphGh({ head, baseSha, comments, nodes }),
     "BeniCheni/elenchus",
     1,
-    kickoffConfig(),
+    replayConfig(),
   );
   return formatCheck(buildCheck(state));
 }
@@ -124,7 +124,7 @@ describe("transcribed #320 records", () => {
     const comments = replayRecords.map((entry, index) =>
       comment(
         index + 1,
-        `${entry.firstLine}\n\n\`\`\`json\n${JSON.stringify(entry.record, null, 2)}\n\`\`\`\n`,
+        `${entry.firstLine}\n\n\`\`\`json\n${JSON.stringify({ ...entry.record, pr: 1 }, null, 2)}\n\`\`\`\n`,
         `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`,
       ),
     );
@@ -137,11 +137,30 @@ describe("transcribed #320 records", () => {
       }),
       "BeniCheni/elenchus",
       1,
-      kickoffConfig(),
+      replayConfig(),
     );
     const status = formatStatus(buildStatus(state));
     const check = formatCheck(buildCheck(state));
     expect(status).toContain(`head ${child} does not equal last output_sha dcb914e`);
     expect(check).not.toMatch(/FAIL /);
   });
+});
+
+it("keeps replay PR numbers and source qualifications faithful to their fixtures", () => {
+  expect(replayRecords.every(({ record }) => record.pr === 1)).toBe(true);
+  expect(prepReplayRecord.record.pr).toBe(3);
+  expect(validateSeatRecord(prepReplayRecord.record).ok).toBe(true);
+  for (const pass of ["0", "1.5"]) {
+    expect(replayRecords.find((entry) => entry.pass === pass)!.record.model.requested).toBe(null);
+  }
+  const rebuttal = replayRecords.find((entry) => entry.pass === "2")!.record;
+  expect(rebuttal.findings.filter(({ id }) => id === "N1" || id === "N2").every(({ disposition }) => disposition === undefined)).toBe(true);
+  const synthesis = replayRecords.find((entry) => entry.pass === "2.5")!.record;
+  expect(synthesis.findings.find(({ id }) => id === "6")!.severity).toBe("medium, not fixed → low");
+  expect(synthesis.findings.filter(({ id }) => ["7", "9", "N1", "N2"].includes(id))
+    .every(({ disposition }) => disposition === undefined)).toBe(true);
+  expect(replayRecords.at(-1)!.record.not_verified).not.toContain("vercel-smoke was left red until main carries the script.");
+  for (const entry of [...replayRecords, prepReplayRecord]) {
+    expect(commentBody(entry)).not.toContain("kickoff#");
+  }
 });

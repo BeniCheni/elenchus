@@ -16,8 +16,19 @@ export type Finding = {
   category?: string;
 };
 
+export type NextRoute = {
+  runtime: string;
+  model: string;
+  effort: string;
+  recommended_by: string | null;
+  confirmed_by: string | null;
+};
+
 export type SeatRecord = {
   seat_record: 1;
+  schema_version?: "1.2";
+  reread?: true;
+  next_route?: NextRoute;
   pr: number;
   pass: string;
   runtime: string;
@@ -39,6 +50,7 @@ export type SeatRecord = {
   coverage?: {
     total: number;
     reviewed: number;
+    reviewed_paths?: string[];
     skipped: { path: string; reason: string }[];
   };
   not_verified?: string[];
@@ -87,6 +99,28 @@ export type VendorConfig = {
   binary?: string;
 };
 
+export type FindingFlow = {
+  opens: string;
+  carries: string[];
+  ruling?: string;
+};
+
+export type RequiredCheck = { name: string; app_id?: number };
+
+export type AllowedChanges = {
+  paths: string[];
+  reread_pass: string;
+  version_only?: { file: string; tests: string[]; pattern?: string };
+};
+
+export type GateConfig = {
+  context: string;
+  app_id?: number;
+  required_checks: RequiredCheck[];
+  blocking_unverified: ("coverage" | "route")[];
+  allowed_changes?: AllowedChanges;
+};
+
 export type Config = {
   passes: PassConfig[];
   vendors: Record<string, VendorConfig>;
@@ -97,6 +131,10 @@ export type Config = {
   forbidden?: string[];
   installs?: InstallConfig[];
   handoff?: HandoffConfig;
+  finding_flow?: FindingFlow;
+  escalate_to?: string;
+  gate?: GateConfig;
+  unknownKeys?: string[];
 };
 
 export type GhComment = {
@@ -111,6 +149,7 @@ export type GhCommitAuthor = { name?: string | null; email?: string | null };
 
 export type GhCompareCommit = {
   sha: string;
+  parents?: { sha: string }[];
   commit?: { author?: GhCommitAuthor | null };
 };
 
@@ -123,14 +162,21 @@ export type GhCompareFile = {
 export type GhCompare = {
   status: "ahead" | "behind" | "diverged" | "identical";
   total_commits?: number;
+  base_commit?: { sha: string };
+  merge_base_commit?: { sha: string };
   commits?: GhCompareCommit[];
   files?: GhCompareFile[];
 };
 
+export type CompareCommits = (base: string, tip: string, paginate?: boolean) => Promise<GhCompare>;
+
 export type GhPull = {
   number: number;
   html_url?: string;
-  head: { sha: string; ref?: string };
+  state?: string;
+  merged?: boolean;
+  merge_commit_sha?: string | null;
+  head: { sha: string; ref?: string; repo?: { full_name?: string } | null };
   base: { sha: string; ref: string };
 };
 
@@ -145,6 +191,7 @@ export type Attempt = {
   valid: boolean;
   reason: string | null;
   record: SeatRecord | null;
+  replaces?: number;
 };
 
 export type RangeCommit = { sha: string; author: string };
@@ -153,6 +200,14 @@ export type LaterRejection = { commentUrl: string; reason: string };
 
 export type Unreadable = { commentUrl: string; reason: string; attached: boolean };
 
+export type RecordedPosting = {
+  record: SeatRecord;
+  commentUrl: string;
+  createdAt: string;
+  id: number;
+  replaces?: number;
+};
+
 export type PassOutcome =
   | { kind: "absent" }
   | {
@@ -160,6 +215,9 @@ export type PassOutcome =
       record: SeatRecord;
       commentUrl: string;
       authorLogin: string;
+      history: RecordedPosting[];
+      postings: RecordedPosting[];
+      posting: RecordedPosting;
       priorFailures: number;
       laterRejections: LaterRejection[];
     }
@@ -183,6 +241,7 @@ export type PassState = {
 };
 
 export type Orphan = {
+  rule: "schema" | "pass";
   pass: string | null;
   commentUrl: string;
   reason: string;
@@ -194,7 +253,10 @@ export type ReviewState = {
   head: string;
   baseRef: string;
   baseSha: string;
+  pull: GhPull;
+  gateStatus: string | null;
   config: Config;
+  compare: CompareCommits;
   passes: PassState[];
   orphans: Orphan[];
   notices: Notice[];
@@ -228,11 +290,15 @@ export type StatusView = {
   /** Set once every pass is recorded: whether the head equals the last output_sha. */
   headNote: string | null;
   unreadable: Unreadable[];
+  merged: boolean;
+  mergeCommit: string | null;
+  gateStatus: string | null;
+  notices?: Notice[];
 };
 
 export type Notice = {
   rule: string;
-  commentUrl: string;
+  commentUrl?: string;
   message: string;
 };
 

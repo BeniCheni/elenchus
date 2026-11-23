@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { assertGitAllowed, type GitScope } from "../src/git.js";
+import { seatCredentialArgs } from "../src/seat-credentials.js";
 
 const scope: GitScope = {
   root: "/tmp/elenchus-root",
+  seatKeychainService: "test seat token",
   places: ["/tmp/elenchus-root/cache.git", "/tmp/elenchus-root/BeniCheni/elenchus/pr-3-pass-1"],
 };
 const cache = scope.places[0] ?? "";
 const seat = scope.places[1] ?? "";
 
+const credentials = seatCredentialArgs("--config", scope.seatKeychainService!);
 const allowed = [
-  ["clone", "--bare", "https://github.com/BeniCheni/elenchus.git", cache],
-  ["clone", "--reference", cache, "--dissociate", "--no-checkout", "--branch", "feature", "/tmp/origin.git", seat],
+  ["clone", ...credentials, "--bare", "https://github.com/BeniCheni/elenchus.git", cache],
+  ["clone", ...credentials, "--reference", cache, "--dissociate", "--no-checkout", "--branch", "feature", "/tmp/origin.git", seat],
   ["-C", seat, "checkout", "--force", "HEAD"],
-  ["-C", cache, "fetch", "origin", "+refs/heads/*:refs/heads/*"],
+  ["-C", cache, ...seatCredentialArgs("-c", scope.seatKeychainService!), "fetch", "origin", "+refs/heads/*:refs/heads/*"],
   ["-C", seat, "rev-parse", "HEAD"],
   ["-C", seat, "merge-base", "origin/main", "abc1234"],
   ["-C", seat, "diff", "-z", "--name-status", "--no-renames", "abc1234", "def5678"],
@@ -73,4 +76,20 @@ describe("git wrapper", () => {
       expect(() => assertGitAllowed(args, scope), args.join(" ")).toThrow(/git write refused/);
     }
   });
+});
+
+it("refuses every deviation from the credential clone configuration", () => {
+  const clone = allowed[0]!;
+  for (const index of [1, 2, 3, 4]) {
+    const changed = clone.filter((_, i) => i !== index);
+    expect(() => assertGitAllowed(changed, scope)).toThrow(/git write refused/);
+  }
+  for (const credentials of [
+    seatCredentialArgs("--config", "different item"),
+    ["--config", "credential.helper=", "--config", "credential.helper=!arbitrary command"],
+  ]) {
+    expect(() => assertGitAllowed(["clone", ...credentials, "--bare", "https://github.com/owner/repo.git", cache], scope))
+      .toThrow(/git write refused/);
+  }
+  expect(() => assertGitAllowed(["clone", "--bare", "https://github.com/owner/repo.git", cache], scope)).toThrow();
 });

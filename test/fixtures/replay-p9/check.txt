@@ -1,6 +1,14 @@
+UNVERIFIED route pass 0 https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925461873 model request not stated
 UNVERIFIED route pass 0 https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925461873 effort not reported
+UNVERIFIED route pass 1.5 https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925482534 model request not stated
 UNVERIFIED route pass 1.5 https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925482534 effort not reported
 UNVERIFIED route pass exec https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925540982 model not reported
 UNVERIFIED route pass exec https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925540982 effort not reported
 UNVERIFIED coverage pass 1 https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925472892 coverage not reported
 UNVERIFIED coverage pass 2.5 https://github.com/BeniCheni/elenchus/pull/1#issuecomment-6925497719 coverage not reported
+FAIL ci verify at dcb914e3724e0e6ed0462f52f248185f9e138d6a is failure
+FAIL head 217189c44e0e6c2aeafc16980e1c79eb3901b67f needs a pass 2.5 re-read at dcb914e3724e0e6ed0462f52f248185f9e138d6a
+NOTICE head 8ea93e2fe5d986a49778150e811a41a53516a837 allowed shape: test version replacement
+NOTICE head 7b7da6b51a9d3b112ce5ee60233bf08fe9760c0e allowed shape: only configured paths
+FAIL head 188b9099749d60a0bcc67d4304002884fdfa7ad5 needs a pass 2.5 re-read at dcb914e3724e0e6ed0462f52f248185f9e138d6a
+NOTICE head dcb914e3724e0e6ed0462f52f248185f9e138d6a allowed shape: only configured paths

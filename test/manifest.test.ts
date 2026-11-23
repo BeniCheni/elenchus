@@ -61,3 +61,44 @@ describe("coverage manifest", () => {
     expect(manifestFromCompare({ status: "ahead", files: [{ status: "modified" }] }).error).toBe("file list truncated");
   });
 });
+
+it("uses the full tree diff at the compare cap, including deletions, renames, modes and submodules", async () => {
+  const { readManifest } = await import("../src/manifest.js");
+  const trees = {
+    old: {
+      tree: [
+        { path: "unchanged", sha: "same", mode: "100644", type: "blob" },
+        { path: "removed", sha: "deleted", mode: "100644", type: "blob" },
+        { path: "renamed-from", sha: "rename", mode: "100644", type: "blob" },
+        { path: "mode", sha: "content", mode: "100644", type: "blob" },
+        { path: "module", sha: "prior", mode: "160000", type: "commit" },
+        { path: "directory", sha: "old-tree", mode: "040000", type: "tree" },
+      ],
+      truncated: false,
+    },
+    new: {
+      tree: [
+        { path: "unchanged", sha: "same", mode: "100644", type: "blob" },
+        { path: "added", sha: "new", mode: "100644", type: "blob" },
+        { path: "renamed-to", sha: "rename", mode: "100644", type: "blob" },
+        { path: "mode", sha: "content", mode: "100755", type: "blob" },
+        { path: "module", sha: "next", mode: "160000", type: "commit" },
+        { path: "directory", sha: "new-tree", mode: "040000", type: "tree" },
+      ],
+      truncated: false,
+    },
+  };
+  const calls: string[] = [];
+  const gh = { async get(path: string) {
+    calls.push(path);
+    if (path === "/repos/team/repo/git/trees/old?recursive=1") return trees.old;
+    if (path === "/repos/team/repo/git/trees/new?recursive=1") return trees.new;
+    throw new Error(path);
+  } };
+  const result = await readManifest(gh, "team/repo", {
+    status: "ahead", files: Array.from({ length: 300 }, () => ({ filename: "truncated", status: "added" })),
+    merge_base_commit: { sha: "old" },
+  }, "new");
+  expect(result).toEqual({ paths: ["removed", "renamed-from", "mode", "module", "added", "renamed-to"], error: null });
+  expect(calls).toHaveLength(2);
+});

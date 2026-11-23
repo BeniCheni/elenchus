@@ -1,4 +1,6 @@
-/** Exact equality, or a unique prefix of at least 7 hex digits. No fuzzy match. */
+export const FULL_SHA = /^[0-9a-fA-F]{40}$/;
+
+/** Exact equality or a prefix of at least 7 hex digits for legacy records. */
 export function sameSha(a: string, b: string): boolean {
   const x = a.toLowerCase();
   const y = b.toLowerCase();

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parseConfig } from "../src/config.js";
 import { formatCheck, formatStatus } from "../src/format.js";
+import type { GhClient } from "../src/gh.js";
 import { loadReview } from "../src/load.js";
 import { buildCheck, buildStatus } from "../src/report.js";
 import type { SeatRecord } from "../src/types.js";
@@ -23,10 +24,10 @@ const nodes = {
 function seat(over: Partial<SeatRecord> & Pick<SeatRecord, "pass">): SeatRecord {
   return {
     seat_record: 1,
-    pr: 320,
+    pr: 1,
     runtime: "Claude Code",
-    model: { requested: "Fable 5.2", observed: "Fable 5.2", source: "transcribed: test" },
-    effort: { requested: "Extra", observed: "Extra", source: "transcribed: test" },
+    model: { requested: "claude-fable-5-2", observed: "claude-fable-5-2", source: "transcribed: test" },
+    effort: { requested: "xhigh", observed: "xhigh", source: "transcribed: test" },
     route: { recommended_by: "PM", confirmed_by: null },
     posted_by: "BeniCheni",
     input_sha: A,
@@ -73,7 +74,7 @@ describe("status and check", () => {
       comment(1, bad, "2026-11-14T00:00:01Z"),
       comment(2, bad, "2026-11-14T00:00:02Z"),
     ]);
-    expect(twice.status).toContain("first resubmission failed; back to the seat");
+    expect(twice.status).toContain("record rejected after 2 failed attempt(s); back to the seat");
     expect(twice.status).not.toContain("escalate to Beni");
 
     const thrice = await review([
@@ -147,7 +148,7 @@ describe("status and check", () => {
     const { check } = await review([
       comment(1, fenced(seat({ pass: "0" })), "2026-11-14T00:00:01Z"),
       comment(2, fenced(seat({ pass: "1", input_sha: A, output_sha: B, commits: [B] })), "2026-11-14T00:00:02Z"),
-      comment(3, fenced(seat({ pass: "2", runtime: "Cursor", input_sha: B, output_sha: C, commits: [C], model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 Extra High", source: "test" }, effort: { requested: "xhigh", observed: "Extra High", source: "test" } })), "2026-11-14T00:00:03Z"),
+      comment(3, fenced(seat({ pass: "2", runtime: "Cursor", input_sha: B, output_sha: C, commits: [C], model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 256K Extra High", source: "test" }, effort: { requested: "xhigh", observed: "Extra High", source: "test" } })), "2026-11-14T00:00:03Z"),
     ], C, A);
     expect(check).toMatch(/FAIL sequence pass 2 .*skipped pass 1\.5/);
   });
@@ -205,7 +206,7 @@ describe("status and check", () => {
           input_sha: A,
           output_sha: C,
           commits: [C],
-          model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 Extra High", source: "test" },
+          model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 256K Extra High", source: "test" },
           effort: { requested: "xhigh", observed: "Extra High", source: "test" },
         })), "2026-11-14T00:00:02Z"),
       ],
@@ -216,7 +217,10 @@ describe("status and check", () => {
     const check = formatCheck(buildCheck(state));
     expect(state.baseSha).toBe(B);
     expect(check).not.toMatch(/FAIL /);
-    expect(calls.some((call) => call.path.endsWith("/commits/replay/main"))).toBe(true);
+    expect(calls.some((call) => call.path.endsWith("/commits/heads%2Freplay%2Fmain"))).toBe(true);
+    expect(calls.filter((call) => call.path.includes("/compare/") && call.paginate)).toEqual([
+      { path: `/repos/BeniCheni/elenchus/compare/${B}...${C}?per_page=100`, paginate: true },
+    ]);
   });
 
   it("drops commits reachable from the base branch before the author check", async () => {
@@ -228,7 +232,7 @@ describe("status and check", () => {
         input_sha: A,
         output_sha: C,
         commits: [C],
-        model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 Extra High", source: "test" },
+        model: { requested: "grok-4.7-xhigh", observed: "Grok 4.7 256K Extra High", source: "test" },
         effort: { requested: "xhigh", observed: "Extra High", source: "test" },
       })), "2026-11-14T00:00:02Z"),
     ], C, B);
@@ -323,7 +327,8 @@ describe("attribution", () => {
       comment(20, body, "2026-11-14T00:01:00Z"),
     ]);
     expect(status).toContain("pass 0: recorded");
-    expect(status).toContain("next: authorize");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(status).not.toContain("rejected");
     expect(check).toContain(`NOTICE extraction ${url(20)} json block is not a seat record`);
     expect(check).not.toMatch(/FAIL /);
@@ -358,7 +363,8 @@ describe("attribution", () => {
       comment(30, fenced(stray), "2026-11-14T00:02:00Z"),
     ]);
     expect(status).toContain("pass exec: recorded");
-    expect(status).toContain("next: authorize");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(status).toContain(`unreadable pass: ${url(30)}`);
     expect(check).toContain(`FAIL schema ${url(30)}`);
     expect(check).not.toMatch(/FAIL sequence/);
@@ -389,8 +395,9 @@ describe("record authors", () => {
       ...recorded("3"),
       comment(12, fenced(seat({ pass: "exec", posted_by: "BeniCheni" })), "2026-11-14T00:00:12Z", "mallory"),
     ]);
-    expect(status).toContain("next: exec");
-    expect(status).not.toContain("next: authorize");
+    expect(status).toContain("pass exec: not recorded");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(check).toContain(`NOTICE record_authors ${url(12)} comment by mallory ignored for records`);
     expect(check).not.toMatch(/FAIL /);
   });
@@ -403,7 +410,8 @@ describe("record authors", () => {
       comment(22, bad, "2026-11-14T00:00:22Z", "mallory"),
       comment(23, bad, "2026-11-14T00:00:23Z", "mallory"),
     ]);
-    expect(status).toContain("next: authorize");
+    expect(status).toContain("next: 2.5");
+    expect(status).toContain("blocked: authorize requires a schema v1.2 record");
     expect(status).not.toContain("escalate to Beni");
     expect(check.match(/NOTICE record_authors /g)?.length).toBe(3);
     expect(check).not.toMatch(/FAIL /);
@@ -449,4 +457,178 @@ describe("unresolvable SHAs", () => {
     expect(status).toContain("pass 1: not recorded");
     expect(check).toMatch(/FAIL sha-chain pass 0 .* cannot resolve /);
   });
+});
+
+describe("v1.2 passes and re-reads", () => {
+  const config = kickoffConfig();
+  config.passes = [
+    { id: "cold", role: "cold", seat: "reviewer" },
+    { id: "finish", role: "finish", seat: "reviewer" },
+  ];
+  const modern = (pass: string, sha: string, fields: Partial<SeatRecord> = {}) => seat({
+    schema_version: "1.2", pr: 1, pass, input_sha: sha, output_sha: sha, ...fields,
+  });
+  const verify = async (records: SeatRecord[], head = B) => {
+    const gh = graphGh({
+      head, baseSha: A, nodes,
+      comments: records.map((record, i) => comment(i + 1, fenced(record), `2026-11-14T00:00:0${i}Z`)),
+    });
+    const state = await loadReview(gh, "BeniCheni/elenchus", 1, config);
+    return { check: formatCheck(buildCheck(state)), status: formatStatus(buildStatus(state)) };
+  };
+
+  it("names an unconfigured pass", async () => {
+    const { check } = await verify([modern("extra", A)]);
+    expect(check).toMatch(/FAIL pass pass extra .*not configured/);
+  });
+
+  it("links a read-only pass to its predecessor's output", async () => {
+    const { check } = await verify([modern("cold", B), modern("finish", A)]);
+    expect(check).toMatch(/FAIL sha-chain pass finish .*previous pass cold/);
+  });
+
+  it("accepts a later re-read of an earlier pass and checks its route in place of the original", async () => {
+    const original = modern("cold", A, { model: { requested: "claude-fable-5-2", observed: "other" } });
+    const { check, status } = await verify([original, modern("finish", A), modern("cold", B, { reread: true })]);
+    expect(check).toBe("ok\n");
+    expect(status).toContain("issuecomment-3");
+    expect(status).toContain(`head equals last output_sha ${B}`);
+  });
+
+  it("accepts and names a same-range correction without changing sequence or a re-read's place", async () => {
+    const original = modern("cold", A, { model: { requested: "claude-fable-5-2", observed: "other" } });
+    const corrected = modern("cold", A);
+    const { check, status } = await verify([original, corrected, modern("finish", A)], A);
+    expect(check).toBe("NOTICE record replacement pass cold comment 2 replaces comment 1 at the same SHAs\n");
+    expect(status).toContain("pass cold comment 2 replaces comment 1 at the same SHAs");
+    const reread = await verify([
+      corrected, modern("finish", A), modern("cold", B, { reread: true }), modern("cold", B),
+    ]);
+    expect(reread.check).toContain("a repeat after a later pass has recorded must be marked as a re-read");
+    expect(reread.status).toContain("issuecomment-3");
+    const outOfOrder = await verify([modern("finish", A), corrected, modern("finish", A)], A);
+    expect(outOfOrder.check).toMatch(/FAIL sequence pass finish/);
+    expect(outOfOrder.check).toContain("NOTICE record replacement pass finish comment 3 replaces comment 1");
+  });
+
+  it.each([
+    { records: [modern("cold", B, { reread: true })], error: /requires an earlier record/ },
+    { records: [modern("cold", A), modern("cold", A, { reread: true })], error: /requires a later output_sha/ },
+    { records: [modern("cold", A), modern("cold", B)], error: /must be marked as a re-read/ },
+    { records: [modern("cold", A), modern("cold", A, { output_sha: B })], error: /must be marked as a re-read/ },
+    { records: [modern("cold", B), modern("cold", B, { input_sha: A })], error: /must be marked as a re-read/ },
+    { records: [modern("cold", B), modern("cold", A, { reread: true })], error: /does not advance from/ },
+    { records: [modern("cold", A), modern("finish", C), modern("cold", B, { reread: true })], error: /does not continue from/ },
+  ])("fails invalid re-read chains %#", async ({ records, error }) => {
+    const { check } = await verify(records, C);
+    expect(check).toMatch(error);
+  });
+});
+
+it("refuses a pull request response with the wrong pull number before further reads", async () => {
+  const calls: string[] = [];
+  const gh: GhClient = { async get(path) {
+    calls.push(path);
+    return { number: 2, head: { sha: A }, base: { ref: "main", sha: A } };
+  } };
+  await expect(loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig())).rejects.toThrow(/returned pull request 2 for 1/);
+  expect(calls).toEqual(["/repos/BeniCheni/elenchus/pulls/1"]);
+});
+
+it("requires a matching model and effort to be listed in the vendor table", async () => {
+  const unlisted = [
+    comment(1, fenced(seat({
+      pass: "0",
+      model: { requested: "unlisted", observed: "unlisted" },
+      effort: { requested: "unlisted", observed: "unlisted" },
+    })), "2026-11-14T00:00:01Z"),
+  ];
+  const { check } = await review(unlisted);
+  expect(check.match(/FAIL route/g)).toHaveLength(2);
+  expect(check).toMatch(/model requested unlisted observed unlisted/);
+  expect(check).toMatch(/effort requested unlisted observed unlisted/);
+});
+
+it("uses the configured addressee and retry cap", async () => {
+  const config = { ...kickoffConfig(), retry_cap: 0, escalate_to: "Rae" };
+  const gh = graphGh({
+    head: A, baseSha: A, nodes,
+    comments: [comment(1, fenced({ seat_record: 1, pass: "0" }), "2026-11-14T00:00:01Z")],
+  });
+  const state = await loadReview(gh, "BeniCheni/elenchus", 1, config);
+  expect(formatStatus(buildStatus(state))).toContain("next: escalate to Rae");
+  expect(formatStatus(buildStatus(state))).toContain("retry cap 0 after 1 failed attempts");
+  expect(formatCheck(buildCheck(state))).toContain("escalate to Rae");
+});
+
+it("fails sequence when an accepted record was posted before its predecessor, including tied timestamps", async () => {
+  const timestamp = "2026-11-14T00:00:01Z";
+  const { check } = await review([
+    comment(2, fenced(seat({ pass: "0" })), timestamp),
+    comment(1, fenced(seat({ pass: "1" })), timestamp),
+  ]);
+  expect(check).toMatch(/FAIL sequence pass 1 .*posted before pass 0/);
+});
+
+it("names a record with the wrong PR and ignores unauthorized comments without a json fence", async () => {
+  const { check } = await review([
+    comment(1, fenced(seat({ pass: "0", pr: 99 })), "2026-11-14T00:00:01Z"),
+    comment(2, "plain prose", "2026-11-14T00:00:02Z", "other"),
+    comment(3, fenced(seat({ pass: "1" })), "2026-11-14T00:00:03Z", "other"),
+  ]);
+  expect(check).toMatch(/FAIL pr pass 0 .*record pr 99 does not match pull request 1/);
+  expect(check).toMatch(/NOTICE record_authors .*issuecomment-3 /);
+  expect(check).not.toContain("issuecomment-2");
+});
+
+it("names a merged PR measured from the merge's first parent without range reads", async () => {
+  const calls: { path: string; paginate?: boolean }[] = [];
+  const gh = graphGh({
+    head: B, baseSha: A, mergedAt: C, nodes, calls,
+    comments: [comment(1, fenced(seat({ pass: "0", input_sha: A, output_sha: B })), "2026-11-14T00:00:01Z")],
+  });
+  const state = await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig());
+  expect(state.baseSha).toBe(B);
+  expect(formatStatus(buildStatus(state))).toContain(`merged: ${C}\n`);
+  for (const pass of state.config.passes) pass.coverage = true;
+  expect(formatCheck(buildCheck(state))).toContain(`NOTICE merged pull request merged at ${C}`);
+  expect(formatCheck(buildCheck(state))).not.toContain("coverage");
+  expect(calls.map(({ path }) => path)).not.toContain("/repos/BeniCheni/elenchus/commits/heads%2Freplay%2Fmain");
+  expect(calls.some(({ path }) => path.includes("/compare/"))).toBe(false);
+});
+
+it("uses encoded refs and avoids writing-pass ranges in status mode", async () => {
+  const calls: { path: string; paginate?: boolean }[] = [];
+  const gh = graphGh({
+    head: C, baseSha: A, baseRef: "feature/a&b+#", nodes, calls,
+    comments: [comment(1, fenced(seat({ pass: "0", input_sha: A, output_sha: B, commits: [B] })), "2026-11-14T00:00:01Z")],
+  });
+  await loadReview(gh, "BeniCheni/elenchus", 1, kickoffConfig(), { ranges: false });
+  expect(calls.some(({ path }) => path.endsWith("/commits/heads%2Ffeature%2Fa%26b%2B%23"))).toBe(true);
+  expect(calls.filter(({ path }) => path.includes("/compare/")).map(({ path }) => path)).toEqual([
+    `/repos/BeniCheni/elenchus/compare/${B}...${C}`,
+  ]);
+});
+
+it("reports that a pull request has no seat records", async () => {
+  const { check } = await review([]);
+  expect(check).toBe("NOTICE records no seat records\n");
+});
+
+it("carries findings across repository-defined pass ids", async () => {
+  const config = kickoffConfig();
+  config.passes = [
+    { id: "discover", role: "discover", seat: "reviewer" },
+    { id: "respond", role: "respond", seat: "builder" },
+  ];
+  config.finding_flow = { opens: "discover", carries: ["respond"] };
+  const gh = graphGh({
+    head: A, baseSha: A, nodes,
+    comments: [
+      comment(1, fenced(seat({ schema_version: "1.2", pass: "discover", findings: [{ id: "F9", severity: "note", status: "open" }] })), "2026-11-14T00:00:01Z"),
+      comment(2, fenced(seat({ schema_version: "1.2", pass: "respond", findings: [] })), "2026-11-14T00:00:02Z"),
+    ],
+  });
+  const state = await loadReview(gh, "BeniCheni/elenchus", 1, config);
+  expect(formatCheck(buildCheck(state))).toMatch(/FAIL finding-carry pass respond finding F9 .*opened in pass discover is missing/);
 });
