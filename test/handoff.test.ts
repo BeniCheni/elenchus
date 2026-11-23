@@ -196,7 +196,7 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string {
 
 const releaseBody = [
   "Pass brief — cold read, seat reviewer — Claude Code, model claude-haiku-5-5, effort xhigh requested (observed: null, source: operator's log) (3 records)",
-  "Pass ship — ruling, seat owner — Notes, model notes-model requested (observed: null, source: chat log), effort medium",
+  "Pass ship — ruling, seat owner — Grok, model grok-4.7 requested (observed: null, source: chat log), effort medium",
   "",
   "Co-authored-by: Cursor <cursoragent@cursor.com>",
   "Co-authored-by: Claude <noreply@anthropic.com>",
@@ -215,7 +215,7 @@ function releaseReview() {
   config.vendors = {
     cursor, codex: config.vendors.codex!, claude: config.vendors.claude!,
     other: { ...cursor, runtimes: [] },
-    notes: { authors: [], runtimes: ["Notes"], models: {}, efforts: { medium: ["medium"] } },
+    xai: config.vendors.xai!,
   };
   const early = "a".repeat(40);
   const original: SeatRecord = {
@@ -228,8 +228,8 @@ function releaseReview() {
     effort: { requested: "xhigh", observed: null, source: "operator's log" },
   };
   const ship: SeatRecord = {
-    ...seat("ship"), schema_version: "1.2", runtime: "Notes",
-    model: { requested: "notes-model", observed: null, source: "chat log" },
+    ...seat("ship"), schema_version: "1.2", runtime: "Grok",
+    model: { requested: "grok-4.7", observed: null, source: "chat log" },
     effort: { requested: "medium", observed: "medium" },
   };
   const client = gh({

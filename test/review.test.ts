@@ -106,6 +106,30 @@ describe("status and check", () => {
     expect(check).toMatch(/FAIL retries pass 0 .*record retries 0 but the comments show 1/);
   });
 
+  it.each([
+    ["2", "Codex", "gpt-6.2-astra", "xhigh", true],
+    ["3", "Grok", "grok-4.7", "medium", true],
+    ["3", "Grok", "grok-4.7", "high", false],
+  ] as const)("checks pass %s on %s, %s at %s", async (pass, runtime, model, effort, allowed) => {
+    const record = seat({
+      pass, runtime, schema_version: "1.2",
+      model: { requested: model, observed: model }, effort: { requested: effort, observed: effort },
+    });
+    const { state } = await review([comment(1, fenced(record), "2026-11-14T00:00:01Z")]);
+    expect(state.passes.find(({ id }) => id === pass)?.outcome).toMatchObject({ kind: "recorded", record });
+    const routes = buildCheck(state).filter(({ rule }) => rule === "route");
+    expect(routes).toEqual(allowed ? [] : [expect.objectContaining({
+      severity: "fail", pass, message: "effort requested high observed high",
+    })]);
+  });
+
+  it("configures the chat-only Grok runtime with no commit authors or prepared seat", () => {
+    expect(kickoffConfig().vendors.xai).toEqual({
+      authors: [], runtimes: ["Grok"], models: { "grok-4.7": ["grok-4.7"] },
+      efforts: { medium: ["medium"] }, read_only_seat: false,
+    });
+  });
+
   it("T13 fails a route mismatch, passes the matching observation, and leaves not reported unverified", async () => {
     const pass0 = seat({ pass: "0" });
     const s2 = (model: SeatRecord["model"]): SeatRecord =>
