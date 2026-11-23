@@ -1,10 +1,11 @@
 import type { GhClient } from "./gh.js";
+import { vendorForRuntime } from "./config.js";
 import { loadReview } from "./load.js";
 import { buildCheck } from "./report.js";
 import { formatCheck } from "./format.js";
 import { shellQuote } from "./quote.js";
 import { sameSha } from "./sha.js";
-import type { Config, GhContent, HandoffConfig } from "./types.js";
+import type { Config, GhContent, HandoffConfig, Observed, ReviewState } from "./types.js";
 
 export async function buildHandoff(
   gh: GhClient,
@@ -16,8 +17,18 @@ export async function buildHandoff(
   const state = await loadReview(gh, repo, pr, config);
   const handoff = state.config.handoff;
   if (!handoff) throw new Error("config has no handoff");
-  const missing = state.passes.find((pass) => pass.outcome.kind !== "recorded");
-  if (missing) throw new Error(`no valid record for pass ${missing.id}`);
+  if (!handoff.merge_command.includes("{merge_body}")) {
+    throw new Error("config.handoff.merge_command must include {merge_body}");
+  }
+  const standingVendors = new Set<string>();
+  const lines = state.passes.map(({ id, role, seat, outcome }) => {
+    if (outcome.kind !== "recorded") throw new Error(`no valid record for pass ${id}`);
+    const { runtime, model, effort } = outcome.record;
+    const holder = vendorForRuntime(state.config, runtime);
+    if (holder) standingVendors.add(holder.name);
+    const count = outcome.history.length > 1 ? ` (${outcome.postings.length} records)` : "";
+    return oneLine(`Pass ${id} — ${role}, seat ${seat} — ${runtime}, model ${routeValue(model)}, effort ${routeValue(effort)}${count}`);
+  });
   const items = buildCheck(state);
   const failures = items.filter((item) => item.severity === "fail");
   if (failures.length > 0) {
@@ -38,7 +49,34 @@ export async function buildHandoff(
     ? subjectOverride.trim()
     : changelogSubject(await readContents(gh, repo, handoff.changelog, state.head), heading);
   if (!subject) throw new Error(`changelog has no section for ${headVersion}`);
-  return renderBlock(handoff, pr, headVersion, subject, repo, state.head);
+  const trailers = await coAuthors(state, standingVendors);
+  if (trailers.length) lines.push("", ...trailers);
+  return renderBlock(handoff, state, headVersion, subject, lines.join("\n"));
+}
+
+function oneLine(text: string): string {
+  return text.replace(/[\r\n]+/g, " ");
+}
+
+function routeValue(value: Observed): string {
+  return value.observed ?? `${value.requested ?? "unspecified"} requested (observed: null, source: ${value.source ?? "absent"})`;
+}
+
+async function coAuthors(state: ReviewState, standingVendors: Set<string>): Promise<string[]> {
+  // Build commits can predate the first seat. Include the whole PR, excluding the base history.
+  const range = await state.compare(state.baseSha, state.head, true);
+  if (!range.commits || range.commits.length !== range.total_commits) {
+    throw new Error("handoff cannot identify commit authors from an incomplete PR comparison");
+  }
+  const authors = new Set(range.commits.map(({ commit }) => `${commit?.author?.name} <${commit?.author?.email}>`));
+  const trailers = new Set<string>();
+  for (const [name, vendor] of Object.entries(state.config.vendors)) {
+    const first = vendor.authors[0];
+    if (first && (standingVendors.has(name) || vendor.authors.some((author) => authors.has(author)))) {
+      trailers.add(`Co-authored-by: ${oneLine(first)}`);
+    }
+  }
+  return [...trailers];
 }
 
 const ABBREVIATIONS = new Set(["vs", "e.g", "i.e", "mr", "mrs", "ms", "dr", "st", "jr", "sr", "etc", "fig", "al", "prof"]);
@@ -82,24 +120,26 @@ function abbreviationBefore(before: string): boolean {
   return ABBREVIATIONS.has(word[1].toLowerCase());
 }
 
-export function renderBlock(
+function renderBlock(
   handoff: HandoffConfig,
-  pr: number,
+  { pr, repo, head, baseRef }: ReviewState,
   version: string,
   subject: string,
-  repo: string,
-  head: string,
+  body: string,
 ): string {
   const values = { version, subject, repo, head };
   const tag = fillRaw(handoff.tag, values);
   const tagMessage = fillRaw(handoff.tag_message, values);
   const mergeMessage = fillRaw(handoff.merge_message, values);
-  const merge = fillCommand(handoff.merge_command, { ...values, pr: String(pr), merge_message: mergeMessage, tag });
+  const merge = fillCommand(handoff.merge_command, { ...values, pr: String(pr), merge_message: mergeMessage, merge_body: body, tag });
   const lines = [
     merge,
-    "git fetch origin main",
-    "git merge --ff-only origin/main",
-    `git tag -a ${shellQuote(tag)} "$(git rev-parse origin/main)" -m ${shellQuote(tagMessage)}`,
+    `merge_commit=$(gh pr view ${shellQuote(String(pr))} --repo ${shellQuote(repo)} --json mergeCommit --jq '.mergeCommit.oid // empty')`,
+    'test -n "$merge_commit"',
+    `git fetch origin ${shellQuote(`refs/heads/${baseRef}:refs/remotes/origin/${baseRef}`)}`,
+    `git switch -- ${shellQuote(baseRef)}`,
+    `git merge --ff-only ${shellQuote(`refs/remotes/origin/${baseRef}`)}`,
+    `git tag -a ${shellQuote(tag)} "$merge_commit" -m ${shellQuote(tagMessage)}`,
     `git push origin ${shellQuote(`refs/tags/${tag}`)}`,
     ...handoff.green,
   ];

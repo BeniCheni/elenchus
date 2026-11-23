@@ -49,21 +49,22 @@ function seat(pass: string): SeatRecord {
   };
 }
 
-function gh(options: { headVersion: string; baseVersion: string; changelog?: string; passes?: string[]; fail?: boolean }): GhClient {
+function gh(options: { headVersion: string; baseVersion: string; changelog?: string; passes?: string[]; fail?: boolean; records?: SeatRecord[]; nodes?: Record<string, Node> }): GhClient {
   const passes = options.passes ?? ["0", "1", "1.5", "2", "2.5", "3", "exec"];
-  const comments: GhComment[] = passes.map((pass, index) =>
+  const records = options.records ?? passes.map((pass) => seat(pass));
+  const comments: GhComment[] = records.map((record, index) =>
     comment(
       index + 1,
       fenced({
-        ...seat(pass),
-        ...(options.fail && pass === "1"
+        ...record,
+        ...(options.fail && record.pass === "1"
           ? { model: { requested: "haiku", observed: "claude-sonnet-5-5", source: "test" } }
           : {}),
       }),
       `2026-11-14T00:00:${String(index).padStart(2, "0")}Z`,
     ),
   );
-  const inner = graphGh({ head: HEAD, baseSha: BASE, comments, nodes });
+  const inner = graphGh({ head: HEAD, baseSha: BASE, comments, nodes: options.nodes ?? nodes });
   const encoded = (text: string) => Buffer.from(text).toString("base64");
   return {
     async get(apiPath, getOptions) {
@@ -86,24 +87,33 @@ describe("handoff", () => {
     expect(changelogSubject(changelog, "## [0.5.5]")).toBe(subject);
     const block = await buildHandoff(gh({ headVersion: "0.5.5", baseVersion: "0.5.4" }), "BeniCheni/elenchus", 1, kickoffConfig());
     const mergeSubject = `v0.5.5 — ${subject}`;
-    expect(block).toBe(
-      `${[
-        `gh pr merge '1' --repo 'BeniCheni/elenchus' --squash --match-head-commit '${HEAD}' --subject '${mergeSubject}'`,
-        "git fetch origin main",
-        "git merge --ff-only origin/main",
-        `git tag -a 'v0.5.5' "$(git rev-parse origin/main)" -m '${mergeSubject}'`,
-        "git push origin 'refs/tags/v0.5.5'",
-        "npm run typecheck",
-        "npm test",
-        "npm run build",
-      ].join(" &&\n")}\n`,
-    );
+    expect(block).toContain(`gh pr merge '1' --repo 'BeniCheni/elenchus' --squash --match-head-commit '${HEAD}' --subject '${mergeSubject}' --body 'Pass 0`);
+    expect(block).toContain(`git tag -a 'v0.5.5' "$merge_commit" -m '${mergeSubject}'`);
+    expect(block).toContain("git push origin 'refs/tags/v0.5.5'");
+    expect(block).toMatch(/npm run typecheck &&\nnpm test &&\nnpm run build\n$/);
   });
 
   it("refuses a head whose version did not change", async () => {
     await expect(
       buildHandoff(gh({ headVersion: "0.5.4", baseVersion: "0.5.4" }), "BeniCheni/elenchus", 1, kickoffConfig()),
     ).rejects.toThrow(/version did not change/);
+  });
+
+  it("names the configuration field when the merge command omits the body", async () => {
+    const config = kickoffConfig();
+    config.handoff!.merge_command = "gh pr merge {pr} --subject {merge_message}";
+    await expect(buildHandoff(gh({ headVersion: "2", baseVersion: "1" }), "BeniCheni/elenchus", 1, config))
+      .rejects.toThrow("config.handoff.merge_command must include {merge_body}");
+  });
+
+  it("refuses incomplete commit attribution", async () => {
+    const inner = gh({ headVersion: "2", baseVersion: "1" });
+    const partial: GhClient = { async get(apiPath, options) {
+      if (apiPath.includes("/compare/") && options?.paginate) return { commits: [], total_commits: 2 };
+      return inner.get(apiPath, options);
+    } };
+    await expect(buildHandoff(partial, "BeniCheni/elenchus", 1, kickoffConfig(), "Release"))
+      .rejects.toThrow("incomplete PR comparison");
   });
 
   it("refuses a review whose check fails, and a pass with no record", async () => {
@@ -184,72 +194,143 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string {
   });
 }
 
+const releaseBody = [
+  "Pass brief — cold read, seat reviewer — Claude Code, model claude-haiku-5-5, effort xhigh requested (observed: null, source: operator's log) (3 records)",
+  "Pass ship — ruling, seat owner — Notes, model notes-model requested (observed: null, source: chat log), effort medium",
+  "",
+  "Co-authored-by: Cursor <cursoragent@cursor.com>",
+  "Co-authored-by: Claude <noreply@anthropic.com>",
+].join("\n");
+
+function releaseReview() {
+  const config = kickoffConfig();
+  config.passes = [
+    { id: "brief", role: "cold\r\nread", seat: "reviewer" },
+    { id: "ship", role: "ruling", seat: "owner" },
+  ];
+  delete config.finding_flow;
+  const alias = "Builder <builder@example.com>";
+  const cursor = config.vendors.cursor!;
+  cursor.authors.push(alias);
+  config.vendors = {
+    cursor, codex: config.vendors.codex!, claude: config.vendors.claude!,
+    other: { ...cursor, runtimes: [] },
+    notes: { authors: [], runtimes: ["Notes"], models: {}, efforts: { medium: ["medium"] } },
+  };
+  const early = "a".repeat(40);
+  const original: SeatRecord = {
+    ...seat("brief"), schema_version: "1.2", input_sha: early, output_sha: early, runtime: "Codex",
+    model: { requested: "gpt-6.1-sol", observed: "gpt-6.1-sol" },
+  };
+  const reread: SeatRecord = {
+    ...seat("brief"), schema_version: "1.2", reread: true,
+    model: { requested: "haiku", observed: "claude-haiku-5-5" },
+    effort: { requested: "xhigh", observed: null, source: "operator's log" },
+  };
+  const ship: SeatRecord = {
+    ...seat("ship"), schema_version: "1.2", runtime: "Notes",
+    model: { requested: "notes-model", observed: null, source: "chat log" },
+    effort: { requested: "medium", observed: "medium" },
+  };
+  const client = gh({
+    headVersion: "0.5.5", baseVersion: "0.5.4", records: [original, { ...original, verdict: "corrected" }, reread, ship],
+    nodes: {
+      [BASE]: { parents: [], author: "Codex <noreply@openai.com>" },
+      [early]: { parents: [BASE], author: alias },
+      [HEAD]: { parents: [early], author: "Owner <owner@example.com>" },
+    },
+  });
+  return buildHandoff(client, "BeniCheni/elenchus", 1, config);
+}
+
 describe("the printed block", () => {
-  it("tags the squash commit and stops when a line fails", async () => {
+  it("passes the standing records as one body and tags the PR squash even when the base advances", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "elenchus-block-"));
     scratch.push(dir);
     const src = path.join(dir, "src");
     mkdirSync(src);
-    git(src, ["init", "-b", "main"]);
+    git(src, ["init", "-b", "replay/main"]);
     writeFileSync(path.join(src, "README.md"), "base\n");
     git(src, ["add", "README.md"]);
     git(src, ["commit", "-m", "base"]);
     const base = git(src, ["rev-parse", "HEAD"]).trim();
     writeFileSync(path.join(src, "README.md"), "feature\n");
-    git(src, ["add", "README.md"]);
-    git(src, ["commit", "-m", "feature"]);
+    git(src, ["commit", "-am", "feature"]);
     const feature = git(src, ["rev-parse", "HEAD"]).trim();
     git(src, ["branch", "feature"]);
     const bare = path.join(dir, "origin.git");
     git(dir, ["clone", "--bare", src, bare]);
-    git(bare, ["update-ref", "refs/heads/main", base]);
+    git(bare, ["update-ref", "refs/heads/replay/main", base]);
     const checkout = path.join(dir, "checkout");
     git(dir, ["clone", bare, checkout]);
+    git(checkout, ["switch", "-c", "operator"]);
     const bin = path.join(dir, "bin");
     mkdirSync(bin);
-    const npmLog = path.join(dir, "npm.log");
-    writeFileSync(
-      path.join(bin, "gh"),
-      `#!/bin/sh\nif [ "$FAIL_MERGE" = 1 ]; then exit 1; fi\nparent=$(git --git-dir="$ORIGIN" rev-parse refs/heads/main)\ntree=$(git --git-dir="$ORIGIN" rev-parse 'refs/heads/feature^{tree}')\nnew=$(git --git-dir="$ORIGIN" commit-tree "$tree" -p "$parent" -m squash)\ngit --git-dir="$ORIGIN" update-ref refs/heads/main "$new"\nexit 0\n`,
-    );
-    writeFileSync(path.join(bin, "npm"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$NPM_LOG"\nexit 0\n`);
-    chmodSync(path.join(bin, "gh"), 0o755);
-    chmodSync(path.join(bin, "npm"), 0o755);
-    const block = await buildHandoff(
-      gh({ headVersion: "0.5.5", baseVersion: "0.5.4" }),
-      "BeniCheni/elenchus",
-      1,
-      kickoffConfig(),
-    );
-    const env = {
-      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-      ORIGIN: bare,
-      NPM_LOG: npmLog,
-      FAIL_MERGE: "1",
+    const stub = (name: string, script: string) => {
+      const file = path.join(bin, name);
+      writeFileSync(file, "#!/bin/sh\nset -eu\n" + script);
+      chmodSync(file, 0o755);
     };
-    expect(() => execFileSync("sh", ["-c", block], { cwd: checkout, env: { ...process.env, ...env } })).toThrow();
-    expect(existsSync(npmLog)).toBe(false);
-    expect(() => git(checkout, ["rev-parse", "refs/tags/v0.5.5"])).toThrow();
-
-    env.FAIL_MERGE = "0";
-    execFileSync("sh", ["-c", block], {
-      cwd: checkout,
-      env: {
-        ...process.env,
-        ...env,
-        GIT_AUTHOR_NAME: "Cursor",
-        GIT_AUTHOR_EMAIL: "cursoragent@cursor.com",
-        GIT_COMMITTER_NAME: "Cursor",
-        GIT_COMMITTER_EMAIL: "cursoragent@cursor.com",
-      },
+    stub("gh", `
+case "$1 $2" in
+  "pr merge")
+    [ "$FAIL_MERGE" = 0 ] || exit 1
+    shift 2
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --body ]; then printf '%s' "$2" > "$LOG/body"; break; fi
+      shift
+    done
+    [ "$QUEUED" = 0 ] || exit 0
+    tree=$(git --git-dir="$ORIGIN" rev-parse 'feature^{tree}')
+    squash=$(git --git-dir="$ORIGIN" commit-tree "$tree" -p "$BASE" -m squash)
+    sync=$(git --git-dir="$ORIGIN" commit-tree "$tree" -p "$squash" -m sync)
+    git --git-dir="$ORIGIN" update-ref refs/heads/replay/main "$sync"
+    printf '%s' "$squash" > "$LOG/squash" ;;
+  "pr view")
+    [ "$#" = 9 ] && [ "$3" = 1 ] && [ "$4" = --repo ] && [ "$5" = BeniCheni/elenchus ] &&
+      [ "$6" = --json ] && [ "$7" = mergeCommit ] && [ "$8" = --jq ] && [ "$9" = '.mergeCommit.oid // empty' ] || exit 2
+    if [ "$QUEUED" = 0 ]; then cat "$LOG/squash"; fi ;;
+  *) exit 2 ;;
+esac
+`);
+    stub("git", `printf '%s\\n' "$*" >> "$LOG/git"\nexec "$REAL_GIT" "$@"\n`);
+    stub("npm", `printf '%s\\n' "$*" >> "$LOG/npm"\n`);
+    const env = {
+      ...process.env,
+      REAL_GIT: execFileSync("which", ["git"], { encoding: "utf8" }).trim(),
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, LOG: dir, ORIGIN: bare, BASE: base,
+      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.com",
+    };
+    const block = await releaseReview();
+    const tags = () => git(checkout, ["tag", "--list"]);
+    expect(tags()).toBe("");
+    const run = (fail: string, queued: string) => execFileSync("sh", ["-c", block], {
+      cwd: checkout, env: { ...env, FAIL_MERGE: fail, QUEUED: queued },
     });
-    const tagged = git(checkout, ["rev-parse", "v0.5.5^{}"]).trim();
-    const originMain = git(bare, ["rev-parse", "refs/heads/main"]).trim();
-    const originTag = git(bare, ["rev-parse", "refs/tags/v0.5.5^{}"]).trim();
-    expect(tagged).toBe(originMain);
-    expect(originTag).toBe(originMain);
-    expect(originMain).not.toBe(base);
-    expect(originMain).not.toBe(feature);
-    expect(readFileSync(npmLog, "utf8")).toBe("run typecheck\ntest\nrun build\n");
+    expect(() => run("1", "0")).toThrow();
+    expect(() => run("0", "1")).toThrow();
+    expect(tags()).toBe("");
+    expect(existsSync(path.join(dir, "npm"))).toBe(false);
+    expect(existsSync(path.join(dir, "git"))).toBe(false);
+
+    run("0", "0");
+    const read = (file: string) => readFileSync(path.join(dir, file), "utf8");
+    expect(read("body")).toBe(releaseBody);
+    const squash = read("squash");
+    const tip = git(bare, ["rev-parse", "refs/heads/replay/main"]).trim();
+    expect(tip).not.toBe(squash);
+    expect(squash).not.toBe(feature);
+    expect(read("git").split("\n")).toEqual(expect.arrayContaining([
+      "fetch origin refs/heads/replay/main:refs/remotes/origin/replay/main",
+      "merge --ff-only refs/remotes/origin/replay/main",
+      `tag -a v0.5.5 ${squash} -m v0.5.5 — ${subject}`,
+    ]));
+    expect(git(checkout, ["branch", "--show-current"]).trim()).toBe("replay/main");
+    expect(git(checkout, ["rev-parse", "HEAD"]).trim()).toBe(tip);
+    expect(git(checkout, ["rev-parse", "v0.5.5^{}"]).trim()).toBe(squash);
+    expect(git(bare, ["rev-parse", "refs/tags/v0.5.5^{}"]).trim()).toBe(squash);
+    expect(read("npm")).toBe("run typecheck\ntest\nrun build\n");
   });
 });

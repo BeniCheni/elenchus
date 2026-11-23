@@ -102,7 +102,7 @@
     "tag": "v{version}",
     "tag_message": "v{version} — {subject}",
     "merge_message": "v{version} — {subject}",
-    "merge_command": "gh pr merge {pr} --repo {repo} --squash --match-head-commit {head} --subject {merge_message}",
+    "merge_command": "gh pr merge {pr} --repo {repo} --squash --match-head-commit {head} --subject {merge_message} --body {merge_body}",
     "green": ["npm run typecheck", "npm test", "npm run build"]
   }
 }
