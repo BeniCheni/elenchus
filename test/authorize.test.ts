@@ -860,7 +860,10 @@ it.each([
     config.finding_flow = { opens: "1", carries: ["2", "2.5"], ruling: "3" };
     if (!gate) delete config.gate;
   } });
-  expect(buildStatus(await loadReview(gh, repo, 1)).next).toMatchObject({ step, blocked });
+  expect(buildStatus(await loadReview(gh, repo, 1)).next).toEqual({
+    step, seat: replayPasses.includes(step) ? step : null, role: replayPasses.includes(step) ? step : null,
+    blocked, options: null,
+  });
 });
 
 const unknownConfigKeyLocations: [string, string, (config: Config) => object][] = [
@@ -883,7 +886,7 @@ type ConfigSplitCase = {
   currentSchema?: boolean;
   records?: SeatRecord[];
   docsPush?: boolean;
-  expectedNext?: { step: string; blocked: string };
+  expectedNext?: { step: string; blocked: string; options?: string[] };
 };
 
 const rejectedRuling = record("3", { findings: [{ id: "F1", severity: "high", status: "open" }] });
@@ -942,7 +945,7 @@ it.each(([
       scenario: "in progress",
       records: replayPasses.slice(0, 6).map((pass) => record(pass)),
       docsPush: true,
-      expectedNext: { step: "exec", blocked: "commits pushed after pass 3 and pass exec has no record" },
+      expectedNext: { step: "exec", blocked: "commits pushed after pass 3 and pass exec has no record", options: ["wait", "re-route"] },
     },
     {
       scenario: "without a record",
@@ -975,13 +978,17 @@ it.each(([
     change(config.gate!, config);
   } });
   const next = buildStatus(await loadReview(gh, repo, 1)).next;
+  expect([next.seat, next.role]).toEqual(replayPasses.includes(next.step) ? [next.step, next.step] : [null, null]);
   if (expectedNext || currentSchema) {
     const control = world({ ...options, configure });
     expect(next).toMatchObject(expectedNext ?? { step: "authorize", blocked: "authorization required" });
     expect(next).toEqual(buildStatus(await loadReview(control.gh, repo, 1)).next);
   } else {
     expect(next).toMatchObject({ step: "2.5", blocked: needsV12 });
+    const control = world({ ...options, configure });
+    expect(next).toEqual(buildStatus(await loadReview(control.gh, repo, 1)).next);
   }
+  expect(next.options).toEqual(expectedNext?.options ?? null);
   const refusal = { ok: false, items: [{ rule: "config", message }] };
   if (dryRun) {
     expect(await authorize(gh, repo, 1, { dryRun: true })).toMatchObject(refusal);
