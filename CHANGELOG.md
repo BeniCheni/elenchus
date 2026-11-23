@@ -8,6 +8,8 @@ releases.
 
 ## [Unreleased]
 
+- Exercise the documentation-only review gate path.
+
 ## [0.5.4] — 2026-11-14
 
 A match decided in extra time or on penalties is stored as its own final, so one such
@@ -905,3 +907,5 @@ trail is `docs/v0.0.3-*.md`).
 - The rewrite: generated-and-diffed fixture data replaces a hand-typed dashboard whose
   audit found ~20 wrong rows. Zod validation at the provider boundary, UTC-instant
   storage, snapshot diffing with urgency exit codes.
+
+Gate fixture documentation-only checkpoint.
