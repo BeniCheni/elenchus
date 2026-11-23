@@ -223,8 +223,8 @@ function releaseReview() {
   const cursor = config.vendors.cursor!;
   cursor.authors.push(alias);
   config.vendors = {
-    cursor, codex: config.vendors.codex!, claude: config.vendors.claude!,
-    other: { ...cursor, runtimes: [] },
+    cursor, other: { ...cursor, runtimes: [] },
+    codex: config.vendors.codex!, claude: config.vendors.claude!,
     xai: config.vendors.xai!,
   };
   const early = "a".repeat(40);
