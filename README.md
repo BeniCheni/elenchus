@@ -94,7 +94,7 @@ fields use all 40 hex digits.
 | `elenchus check <pr>` | Every rule, below. Prints `ok`, or one `FAIL`, `UNVERIFIED` or `NOTICE` line per problem. |
 | `elenchus prep <pr> <pass> --seat-keychain-service <name> [route flags]` | Makes the seat for the next pass: its own clone at the expected commit, its installs, a deny profile in the vendor's own format, a stamp of the route and a coverage manifest; then prints the line that launches it. `--root` moves the seats from `~/.elenchus/seats`. |
 | `elenchus authorize <pr> [--dry-run] [--app-keychain-service <name>]` | Checks completeness, configured blockers, allowed head changes and required CI checks, then posts the success status as the configured App. Dry-run prints the decision. |
-| `elenchus handoff <pr>` | Prints a release block with the reviewed head, squash subject and body. The block reads the PR's merge commit after merging, fetches and fast-forwards its base branch, then tags that commit. `--subject` overrides the changelog subject. |
+| `elenchus handoff <pr>` | Prints a release block with the reviewed head, squash subject and body. The block reads the PR's merge commit after merging, fetches the base, and tags and pushes that commit before updating the local base branch. `--subject` overrides the changelog subject. |
 
 `<pr>` is `owner/repo#n` or a pull-request URL. `check` exits 0 with no `FAIL`, 1 with one, and
 2 when it cannot run. `authorize` exits 1 for each refusal and 2 for an execution error.
@@ -206,9 +206,12 @@ observation carries the request and its source. The trailers use the first confi
 of each vendor with a PR commit or a standing record, in vendor order. Vendors with an
 empty authors list contribute no trailer.
 
-Run the printed block in the target repository's checkout. It switches to the PR's base
-branch and fast-forwards it. The tag uses the commit reported by `gh pr view --json mergeCommit`.
-If the merge fails or is still queued, the command chain stops before tagging.
+Elenchus folds runs of control characters in the block's input values to one space and refuses handoff templates or green commands that contain them.
+Run the block in the target checkout using sh, Bash or zsh. The block requires one control-free URL for both fetching from and pushing to origin and refuses otherwise.
+Handoff checks the repository for the tag when it prints the block. At paste time the block checks the local tag and reads origin immediately before merging.
+After the merge it reads the PR's merge commit, stops if that commit is absent, fetches the base, then tags the merge commit and pushes the tag before switching to the base, fast-forwarding and running the green commands.
+That order lets a dirty file or a base branch held by another worktree stop the checkout update after the tag has reached origin.
+If a tag lands between the last read and the merge, the merge has run: a fetched tag stops local tag creation, and a tag still only on origin stops the non-forcing push, leaving the existing tag intact for the operator to resolve and tag by hand.
 
 Optional `finding_flow` names `opens`, ordered `carries`, and the later `ruling` pass.
 `escalate_to` supplies the escalation addressee. `gate` declares the status `context`,

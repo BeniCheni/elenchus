@@ -68,6 +68,7 @@ function gh(options: { headVersion: string; baseVersion: string; changelog?: str
   const encoded = (text: string) => Buffer.from(text).toString("base64");
   return {
     async get(apiPath, getOptions) {
+      if (apiPath.startsWith("/repos/BeniCheni/elenchus/git/ref/tags/")) throw new Error("gh: Not Found (HTTP 404)");
       if (apiPath.includes("/contents/package.json")) {
         const version = apiPath.includes(`ref=${HEAD}`) ? options.headVersion : options.baseVersion;
         return { content: encoded(JSON.stringify({ version })), encoding: "base64" };
@@ -91,6 +92,50 @@ describe("handoff", () => {
     expect(block).toContain(`git tag -a 'v0.5.5' "$merge_commit" -m '${mergeSubject}'`);
     expect(block).toContain("git push origin 'refs/tags/v0.5.5'");
     expect(block).toMatch(/npm run typecheck &&\nnpm test &&\nnpm run build\n$/);
+  });
+
+  it.each([
+    ["existing tag", null, "tag v2 already exists"],
+    ["unreadable tag", "gh: Forbidden (HTTP 403)", "cannot establish whether tag v2 exists"],
+    ["mixed diagnostic", "connection failed after (HTTP 404)", "cannot establish whether tag v2 exists"],
+  ] as const)("refuses an %s at print time", async (_scenario, failure, message) => {
+    const inner = gh({ headVersion: "2", baseVersion: "1" });
+    const client: GhClient = { async get(apiPath, options) {
+      if (apiPath === "/repos/BeniCheni/elenchus/git/ref/tags/v2") {
+        if (failure) throw new Error(failure);
+        return { ref: "refs/tags/v2" };
+      }
+      return inner.get(apiPath, options);
+    } };
+    await expect(buildHandoff(client, "BeniCheni/elenchus", 1, kickoffConfig(), "Release")).rejects.toThrow(message);
+  });
+
+  it.each(["section_heading", "merge_command", "merge_message", "tag_message", "tag", "green"] as const)(
+    "names the handoff field %s when its template contains a control", async (field) => {
+      const config = kickoffConfig();
+      if (field === "green") config.handoff!.green[0] += "\u009b";
+      else config.handoff![field] += "\u009b";
+      const client = gh({ headVersion: "2", baseVersion: "1" });
+      await expect(buildHandoff(client, "BeniCheni/elenchus", 1, config, "Release"))
+        .rejects.toThrow("config.handoff." + (field === "green" ? "green[0]" : field) + " contains a control character");
+    },
+  );
+
+  it("folds record, changelog and version controls wherever they enter the block", async () => {
+    const config = kickoffConfig();
+    config.passes = [{ id: "0", role: "brief", seat: "operator" }];
+    config.handoff!.merge_command += " {subject} {version} {tag}";
+    const record = { ...seat("0"), model: { requested: "haiku", observed: null, source: "log\x1b\0end" } };
+    const version = "2\u0085\u2029x";
+    const client = gh({ headVersion: version, baseVersion: "1", records: [record],
+      changelog: "## [" + version + "]\n\nRelease\x1b[1A\x1b[2K\x07now.\n" });
+    const block = await buildHandoff(client, "BeniCheni/elenchus", 1, config);
+    expect(block).not.toMatch(/[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]/);
+    expect(block).toContain("source: log end)");
+    expect(block).toContain("--subject 'v2 x — Release [1A [2K now.'");
+    expect(block).toContain("-m 'v2 x — Release [1A [2K now.'");
+    expect(block).toContain("'Release [1A [2K now.' '2 x' 'v2 x'");
+    expect(block).toContain("refs/tags/v2 x");
   });
 
   it("refuses a head whose version did not change", async () => {
@@ -221,6 +266,7 @@ function releaseReview() {
   delete config.finding_flow;
   const alias = "Builder <builder@example.com>";
   const cursor = config.vendors.cursor!;
+  cursor.authors[0] = "Cursor\n<cursoragent@cursor.com>";
   cursor.authors.push(alias);
   config.vendors = {
     cursor, other: { ...cursor, runtimes: [] },
@@ -253,79 +299,127 @@ function releaseReview() {
   return buildHandoff(client, "BeniCheni/elenchus", 1, config);
 }
 
-describe("the printed block", () => {
-  it("passes the standing records as one body and tags the PR squash even when the base advances", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "elenchus-block-"));
-    scratch.push(dir);
-    const src = path.join(dir, "src");
-    mkdirSync(src);
-    git(src, ["init", "-b", "replay/main"]);
-    writeFileSync(path.join(src, "README.md"), "base\n");
-    git(src, ["add", "README.md"]);
-    git(src, ["commit", "-m", "base"]);
-    const base = git(src, ["rev-parse", "HEAD"]).trim();
-    writeFileSync(path.join(src, "README.md"), "feature\n");
-    git(src, ["commit", "-am", "feature"]);
-    const feature = git(src, ["rev-parse", "HEAD"]).trim();
-    git(src, ["branch", "feature"]);
-    const bare = path.join(dir, "origin.git");
-    git(dir, ["clone", "--bare", src, bare]);
-    git(bare, ["update-ref", "refs/heads/replay/main", base]);
-    const checkout = path.join(dir, "checkout");
-    git(dir, ["clone", bare, checkout]);
-    git(checkout, ["switch", "-c", "operator"]);
-    const bin = path.join(dir, "bin");
-    mkdirSync(bin);
-    const stub = (name: string, script: string) => {
-      const file = path.join(bin, name);
-      writeFileSync(file, "#!/bin/sh\nset -eu\n" + script);
-      chmodSync(file, 0o755);
-    };
-    stub("gh", `
+function blockCheckout() {
+  const dir = mkdtempSync(path.join(tmpdir(), "elenchus-block-"));
+  scratch.push(dir);
+  const src = path.join(dir, "src");
+  mkdirSync(src);
+  git(src, ["init", "-b", "replay/main"]);
+  writeFileSync(path.join(src, "README.md"), "base\n");
+  git(src, ["add", "README.md"]);
+  git(src, ["commit", "-m", "base"]);
+  const base = git(src, ["rev-parse", "HEAD"]).trim();
+  writeFileSync(path.join(src, "README.md"), "feature\n");
+  git(src, ["commit", "-am", "feature"]);
+  const feature = git(src, ["rev-parse", "HEAD"]).trim();
+  git(src, ["branch", "feature"]);
+  const bare = path.join(dir, "origin.git");
+  git(dir, ["clone", "--bare", src, bare]);
+  git(bare, ["update-ref", "refs/heads/replay/main", base]);
+  const checkout = path.join(dir, "checkout");
+  git(dir, ["clone", bare, checkout]);
+  git(checkout, ["switch", "-c", "operator"]);
+  const bin = path.join(dir, "bin");
+  mkdirSync(bin);
+  const stub = (name: string, script: string) => {
+    const file = path.join(bin, name);
+    writeFileSync(file, "#!/bin/sh\nset -eu\n" + script);
+    chmodSync(file, 0o755);
+  };
+  stub("gh", `
 case "$1 $2" in
   "pr merge")
-    [ "$FAIL_MERGE" = 0 ] || exit 1
-    shift 2
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = --body ]; then printf '%s' "$2" > "$LOG/body"; break; fi
-      shift
-    done
-    [ "$QUEUED" = 0 ] || exit 0
-    tree=$(git --git-dir="$ORIGIN" rev-parse 'feature^{tree}')
-    squash=$(git --git-dir="$ORIGIN" commit-tree "$tree" -p "$BASE" -m squash)
-    sync=$(git --git-dir="$ORIGIN" commit-tree "$tree" -p "$squash" -m sync)
-    git --git-dir="$ORIGIN" update-ref refs/heads/replay/main "$sync"
-    printf '%s' "$squash" > "$LOG/squash" ;;
+  echo called >> "$LOG/merge-calls"
+  [ "$FAIL_MERGE" = 0 ] || exit 1
+  shift 2
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = --body ]; then printf '%s' "$2" > "$LOG/body"; break; fi
+    shift
+  done
+  [ "$QUEUED" = 0 ] || exit 0
+  tree=$(git --git-dir="$ORIGIN" rev-parse 'feature^{tree}')
+  squash=$(git --git-dir="$ORIGIN" commit-tree "$tree" -p "$BASE" -m squash)
+  sync=$(git --git-dir="$ORIGIN" commit-tree "$tree" -p "$squash" -m sync)
+  git --git-dir="$ORIGIN" update-ref refs/heads/replay/main "$sync"
+  printf '%s' "$squash" > "$LOG/squash" ;;
   "pr view")
-    [ "$#" = 9 ] && [ "$3" = 1 ] && [ "$4" = --repo ] && [ "$5" = BeniCheni/elenchus ] &&
-      [ "$6" = --json ] && [ "$7" = mergeCommit ] && [ "$8" = --jq ] && [ "$9" = '.mergeCommit.oid // empty' ] || exit 2
-    if [ "$QUEUED" = 0 ]; then cat "$LOG/squash"; fi ;;
+  [ "$#" = 9 ] && [ "$3" = 1 ] && [ "$4" = --repo ] && [ "$5" = BeniCheni/elenchus ] &&
+    [ "$6" = --json ] && [ "$7" = mergeCommit ] && [ "$8" = --jq ] && [ "$9" = '.mergeCommit.oid // empty' ] || exit 2
+  if [ "$QUEUED" = 0 ]; then cat "$LOG/squash"; fi ;;
   *) exit 2 ;;
 esac
 `);
-    stub("git", `printf '%s\\n' "$*" >> "$LOG/git"\nexec "$REAL_GIT" "$@"\n`);
-    stub("npm", `printf '%s\\n' "$*" >> "$LOG/npm"\n`);
-    const env = {
-      ...process.env,
-      REAL_GIT: execFileSync("which", ["git"], { encoding: "utf8" }).trim(),
-      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, LOG: dir, ORIGIN: bare, BASE: base,
-      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.com",
-    };
+  stub("git", `printf '%s\\n' "$*" >> "$LOG/git"\nexec "$REAL_GIT" "$@"\n`);
+  stub("npm", `printf '%s\\n' "$*" >> "$LOG/npm"\n`);
+  const env = {
+    ...process.env,
+    REAL_GIT: execFileSync("which", ["git"], { encoding: "utf8" }).trim(),
+    PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, LOG: dir, ORIGIN: bare, BASE: base,
+    GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_ALLOW_PROTOCOL: "file",
+    GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.com",
+    GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.com",
+  };
+  const run = (block: string, fail = "0", queued = "0") => execFileSync("sh", ["-c", block], {
+    cwd: checkout, env: { ...env, FAIL_MERGE: fail, QUEUED: queued }, stdio: "pipe",
+  });
+  return { dir, checkout, bare, base, feature, run };
+}
+
+describe("the printed block", () => {
+  it.each(["base in another worktree", "dirty file changed by merge"])("pushes the squash tag before handling a %s", async (scenario) => {
+    const { dir, checkout, bare, run } = blockCheckout();
+    if (scenario === "base in another worktree") git(checkout, ["worktree", "add", path.join(dir, "second"), "replay/main"]);
+    else writeFileSync(path.join(checkout, "README.md"), "uncommitted edit\n");
+    const block = await releaseReview();
+    expect(() => run(block)).toThrow();
+    const squash = readFileSync(path.join(dir, "squash"), "utf8");
+    expect(git(bare, ["rev-parse", "refs/tags/v0.5.5^{}"]).trim()).toBe(squash);
+  });
+
+  it.each(["local tag", "late origin tag", "unreadable origin", "separate push URL", "two push URLs",
+    "push URL with trailing LF", "shared URL with embedded LF", "shared URL with horizontal tab",
+    "shared URL with C1 control", "shared URL with Unicode line separator"])("stops before merge for %s", async (scenario) => {
+    const { dir, checkout, bare, base, run } = blockCheckout();
+    const block = await releaseReview();
+    const tag = "refs/tags/v0.5.5";
+    const other = path.join(dir, "publish.git");
+    switch (scenario) {
+      case "local tag": git(checkout, ["update-ref", tag, base]); break;
+      case "late origin tag": git(bare, ["update-ref", tag, base]); break;
+      case "unreadable origin": git(checkout, ["remote", "set-url", "origin", other]); break;
+      case "separate push URL":
+        git(dir, ["clone", "--bare", bare, other]);
+        git(other, ["update-ref", tag, base]);
+        git(checkout, ["remote", "set-url", "--push", "origin", other]);
+        break;
+      case "two push URLs":
+        for (const url of [bare, other]) git(checkout, ["remote", "set-url", "--add", "--push", "origin", url]);
+        break;
+      case "push URL with trailing LF": git(checkout, ["remote", "set-url", "--push", "origin", bare + "\n"]); break;
+      default: {
+        const separator = { "shared URL with embedded LF": "\n", "shared URL with horizontal tab": "\t",
+          "shared URL with C1 control": "\u009b", "shared URL with Unicode line separator": "\u2028" }[scenario]!;
+        const shared = path.join(dir, "origin" + separator + "repo.git");
+        git(dir, ["clone", "--bare", bare, shared]);
+        git(checkout, ["remote", "set-url", "origin", shared]);
+      }
+    }
+    expect(() => run(block, "1")).toThrow();
+    expect(existsSync(path.join(dir, "merge-calls"))).toBe(false);
+  });
+
+  it("passes the standing records as one body and tags the PR squash even when the base advances", async () => {
+    const { dir, checkout, bare, feature, run } = blockCheckout();
     const block = await releaseReview();
     const tags = () => git(checkout, ["tag", "--list"]);
     expect(tags()).toBe("");
-    const run = (fail: string, queued: string) => execFileSync("sh", ["-c", block], {
-      cwd: checkout, env: { ...env, FAIL_MERGE: fail, QUEUED: queued },
-    });
-    expect(() => run("1", "0")).toThrow();
-    expect(() => run("0", "1")).toThrow();
+    expect(() => run(block, "1")).toThrow();
+    expect(() => run(block, "0", "1")).toThrow();
     expect(tags()).toBe("");
     expect(existsSync(path.join(dir, "npm"))).toBe(false);
-    expect(existsSync(path.join(dir, "git"))).toBe(false);
+    expect(readFileSync(path.join(dir, "git"), "utf8")).not.toMatch(/^(fetch|switch|merge|tag|push) /m);
 
-    run("0", "0");
+    run(block);
     const read = (file: string) => readFileSync(path.join(dir, file), "utf8");
     expect(read("body")).toBe(releaseBody);
     const squash = read("squash");
