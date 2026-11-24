@@ -16,7 +16,7 @@ The name is Socrates' method: a claim stands only if it survives questioning. He
 
 elenchus is an installable CLI. Two public projects illustrate the review method:
 
-- [keel](https://github.com/BeniCheni/keel), whose seats already post records by hand, read back
+- [keel](https://github.com/BeniCheni/keel), whose seats post records by hand, read back
   with `status` and `check`.
 - [Kickoff](https://github.com/BeniCheni/kickoff), where the review method was first run by hand.
   A replay of one of its reviews is this repository's live fixture.
@@ -197,7 +197,7 @@ green). Each is required only by the command that uses it.
 [`examples/kickoff.elenchus.json`](examples/kickoff.elenchus.json) is one adopter's complete
 file.
 
-In `handoff.merge_command`, include `{merge_body}` where the merge CLI accepts its
+Handoff refuses `handoff.merge_command` without `{merge_body}`. Include the placeholder where the merge CLI accepts its
 squash body, for example `--body {merge_body}`. The renderer shell-quotes it as one
 argument, just as it quotes `{merge_message}` for the subject. Each line names the configured
 pass, role and seat, followed by the standing record's runtime, model and effort. A re-read
@@ -211,7 +211,7 @@ Run the block in the target checkout using sh, Bash or zsh. The block requires o
 Handoff checks the repository for the tag when it prints the block. At paste time the block checks the local tag and reads origin immediately before merging.
 After the merge it reads the PR's merge commit, stops if that commit is absent, fetches the base, then tags the merge commit and pushes the tag before switching to the base, fast-forwarding and running the green commands.
 That order lets a dirty file or a base branch held by another worktree stop the checkout update after the tag has reached origin.
-If a tag lands between the last read and the merge, the merge has run: a fetched tag stops local tag creation, and a tag still only on origin stops the non-forcing push, leaving the existing tag intact for the operator to resolve and tag by hand.
+If a tag lands between the last read and the merge, the merge has run and either the fetched tag stops local tag creation or the non-forcing push refuses to overwrite it, leaving the operator to resolve the release and tag by hand.
 
 Optional `finding_flow` names `opens`, ordered `carries`, and the later `ruling` pass.
 `escalate_to` supplies the escalation addressee. `gate` declares the status `context`,
@@ -325,7 +325,8 @@ pull request's install scripts as you.
 
 Use Node 24 or later and npm. For `status` and `check`, sign in to `gh` with an account
 that can read the target repository. To pin the tool in an adopter project, substitute the
-full 40-character commit SHA from the elenchus revision you reviewed.
+full 40-character commit SHA from the elenchus revision you reviewed. The first usable pin is
+`30c352a`, which added `prepare`. Installing an earlier commit can exit 0 without installing a CLI.
 
 ```bash
 npm install 'github:BeniCheni/elenchus#<40-character-commit-sha>'
@@ -336,8 +337,11 @@ npx --no-install elenchus check owner/repo#123
 Commit the resulting package manifest and lockfile. CI installs the same revision with
 `npm ci`. For a Git dependency, npm installs the build dependencies and runs `prepare`
 to compile `dist/` before packing. Source installs require that preparation step.
-For an installation that disables lifecycle scripts, build and pack the tool first and
-install the resulting tarball, which already contains the CLI.
+With lifecycle scripts disabled, the Git install also exits 0 without a CLI. The first sign is
+`command not found` from `npx --no-install`. In that environment, install a prebuilt tarball.
+For the GitHub pin, npm fetches the lockfile's `git+ssh` dependency over HTTPS from codeload.
+It checks neither that transport URL nor the lockfile's integrity for the Git dependency. The commit
+SHA is the only verification for this pin.
 
 ## Roadmap
 
@@ -351,13 +355,13 @@ and a merge waits for that proof. In order:
 3. **The gate and schema v1.2.** Done on the replay. App-backed `authorize`, configurable policy, re-reads and
    repository-defined passes. Live proof on the replay precedes adopter enablement.
 4. **Adoption.** elenchus supports commit-pinned installs and release blocks built from the
-   PR's records, base and merge commit. After v0.6.0, Kickoff's half adds the seat-record
-   block to its review skill and calls the pinned tool. The gate on adopter default branches
+   PR's records, base and merge commit. After Kickoff v0.6.0, its review skill adds the seat-record
+   block and calls the pinned tool. The gate on adopter default branches
    follows, including the bot-workflow path.
 5. **Seats that start themselves.** `elenchus run` launches a confirmed route and checks its
    observation before the seat pushes. Claude Code first, then Codex.
 
-Deferred: a graphical viewer, and seats from vendors beyond these three.
+A graphical viewer and support for additional seat vendors are deferred.
 
 ## Development
 

@@ -7,7 +7,7 @@ import { expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-it("packs a working CLI entry point from an unbuilt source tree", () => {
+it("lists the CLI entry point and record schema in the tarball from an unbuilt source tree", () => {
   const cwd = mkdtempSync(path.join(tmpdir(), "elenchus-package-"));
   try {
     for (const file of ["package.json", "tsconfig.json", "tsconfig.build.json", "src", "schema"]) {
