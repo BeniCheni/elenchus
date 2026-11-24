@@ -46,7 +46,7 @@ function world(options: {
   const configured = kickoffConfig();
   const allPasses = options.allPasses ?? ["cold", "synthesis", "ruling"];
   configured.passes = allPasses.map((id) => ({
-    id, role: id, seat: id, ...(options.covered ? { coverage: true } : {}),
+    id, role: `role ${id}`, seat: `seat ${id}`, ...(options.covered ? { coverage: true } : {}),
   }));
   configured.finding_flow = { opens: "cold", carries: ["reply", "synthesis"].filter((id) => allPasses.includes(id)), ruling: "ruling" };
   const gate = configured.gate!;
@@ -861,7 +861,9 @@ it.each([
     if (!gate) delete config.gate;
   } });
   expect(buildStatus(await loadReview(gh, repo, 1)).next).toEqual({
-    step, seat: replayPasses.includes(step) ? step : null, role: replayPasses.includes(step) ? step : null,
+    step,
+    seat: replayPasses.includes(step) ? `seat ${step}` : null,
+    role: replayPasses.includes(step) ? `role ${step}` : null,
     blocked, options: null,
   });
 });
@@ -978,7 +980,8 @@ it.each(([
     change(config.gate!, config);
   } });
   const next = buildStatus(await loadReview(gh, repo, 1)).next;
-  expect([next.seat, next.role]).toEqual(replayPasses.includes(next.step) ? [next.step, next.step] : [null, null]);
+  expect([next.seat, next.role]).toEqual(replayPasses.includes(next.step)
+    ? [`seat ${next.step}`, `role ${next.step}`] : [null, null]);
   if (expectedNext || currentSchema) {
     const control = world({ ...options, configure });
     expect(next).toMatchObject(expectedNext ?? { step: "authorize", blocked: "authorization required" });

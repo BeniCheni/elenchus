@@ -106,11 +106,12 @@ describe("transcribed #320 records", () => {
 
   it("T1 names the next seat and blocker at each replay record boundary", async () => {
     const expected = [
-      ["0", "PM"], ["1", "reviewer"], ["1.5", "PM"], ["2", "builder"], ["2.5", "PM"],
-      ["2.5", "PM"], ["2.5", "PM"], ["2.5", "PM"],
+      ["0", "PM", "brief the cold review"], ["1", "reviewer", "cold review"],
+      ["1.5", "PM", "rebuttal brief"], ["2", "builder", "rebuttal"], ["2.5", "PM", "synthesis"],
+      ["2.5", "PM", "synthesis"], ["2.5", "PM", "synthesis"], ["2.5", "PM", "synthesis"],
     ] as const;
     expect(expected).toHaveLength(replayRecords.length + 1);
-    for (const [count, [step, seat]] of expected.entries()) {
+    for (const [count, [step, seat, role]] of expected.entries()) {
       const entries = replayRecords.slice(0, count);
       const head = entries.at(-1)?.record.output_sha ?? "0faf606";
       const comments = entries.map(({ record }, i) => comment(i + 1,
@@ -119,7 +120,7 @@ describe("transcribed #320 records", () => {
       const state = await loadReview(graphGh({ head, baseSha: full["34d078b"], nodes, comments }),
         "BeniCheni/elenchus", 1, replayConfig(), { ranges: false });
       const blocked = count >= 5 ? "authorize requires a schema v1.2 record" : `no record for pass ${step}`;
-      expect(buildStatus(state).next, `after ${count} records`).toMatchObject({ step, seat, blocked });
+      expect(buildStatus(state).next, `after ${count} records`).toMatchObject({ step, seat, role, blocked });
     }
   });
 
