@@ -104,6 +104,36 @@ describe("transcribed #320 records", () => {
     expect(report).toMatch(/FAIL sequence pass 2 .*skipped pass 1\.5/);
   });
 
+  it("T1 names the next seat and blocker at each replay record boundary", async () => {
+    const expected = [
+      ["0", "PM", "brief the cold review"], ["1", "reviewer", "cold review"],
+      ["1.5", "PM", "rebuttal brief"], ["2", "builder", "rebuttal"], ["2.5", "PM", "synthesis"],
+      ["2.5", "PM", "synthesis"], ["2.5", "PM", "synthesis"], ["2.5", "PM", "synthesis"],
+    ] as const;
+    expect(expected).toHaveLength(replayRecords.length + 1);
+    for (const [count, [step, seat, role]] of expected.entries()) {
+      const entries = replayRecords.slice(0, count);
+      const head = entries.at(-1)?.record.output_sha ?? "0faf606";
+      const comments = entries.map(({ record }, i) => comment(i + 1,
+        commentBody({ ...replayRecords[i]!, record: { ...record, pr: 1 } }), `2026-11-14T00:00:0${i}Z`,
+      ));
+      const state = await loadReview(graphGh({ head, baseSha: full["34d078b"], nodes, comments }),
+        "BeniCheni/elenchus", 1, replayConfig(), { ranges: false });
+      const blocked = count >= 5 ? "authorize requires a schema v1.2 record" : `no record for pass ${step}`;
+      expect(buildStatus(state).next, `after ${count} records`).toMatchObject({ step, seat, role, blocked });
+    }
+  });
+
+  it("T13 rejects the Haiku/Sonnet mismatch in the replay and accepts its restored record", async () => {
+    const records = replayRecords.map(({ record }) => record);
+    const mismatched = records.map((record) => record.pass === "1" ? {
+      ...record, model: { requested: "haiku", observed: "claude-sonnet-5-5", source: "modelUsage" },
+    } : record);
+    const broken = await checkRecords(mismatched, full.dcb914e, full["34d078b"]);
+    expect(broken).toMatch(/FAIL route pass 1 .*model requested haiku observed claude-sonnet-5-5/);
+    expect(await checkRecords(records, full.dcb914e, full["34d078b"])).not.toContain("FAIL route");
+  });
+
   it("T3 names finding 7 when Pass 2 drops it, and passes when the record is restored", async () => {
     const without = replayRecords.map((entry) => {
       if (entry.pass !== "2") return entry.record;

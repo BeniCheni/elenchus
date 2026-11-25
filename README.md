@@ -3,7 +3,7 @@
 A controller for multi-pass, cross-vendor AI code review on GitHub.
 
 In a review run this way, each pass of a pull request's review is its own agent session, a
-*seat*, routed to the vendor, model and effort chosen for it: Claude Code, Codex or Cursor. Every
+*seat*, routed to the vendor, model and effort chosen for it. Every
 seat ends its pull-request comment with a *seat record*, a small JSON block saying what it was
 asked to run, what it actually ran, which commits it read and wrote, and what it found. elenchus
 reads those records back from GitHub, checks them against the repository's own rules, and says
@@ -14,14 +14,12 @@ The name is Socrates' method: a claim stands only if it survives questioning. He
 
 ## Status
 
-A controller built as an installable CLI package, version 0.0.0. Two public projects are
-adopting it:
+elenchus is an installable CLI. Two public projects illustrate the review method:
 
-- [keel](https://github.com/BeniCheni/keel), whose seats already post records by hand, read back
+- [keel](https://github.com/BeniCheni/keel), whose seats post records by hand, read back
   with `status` and `check`.
 - [Kickoff](https://github.com/BeniCheni/kickoff), where the review method was first run by hand.
-  A replay of one of its reviews is this repository's live fixture. Posting records in Kickoff
-  is planned for its adoption phase.
+  A replay of one of its reviews is this repository's live fixture.
 
 Any repository on GitHub can adopt it the same way.
 
@@ -96,7 +94,7 @@ fields use all 40 hex digits.
 | `elenchus check <pr>` | Every rule, below. Prints `ok`, or one `FAIL`, `UNVERIFIED` or `NOTICE` line per problem. |
 | `elenchus prep <pr> <pass> --seat-keychain-service <name> [route flags]` | Makes the seat for the next pass: its own clone at the expected commit, its installs, a deny profile in the vendor's own format, a stamp of the route and a coverage manifest; then prints the line that launches it. `--root` moves the seats from `~/.elenchus/seats`. |
 | `elenchus authorize <pr> [--dry-run] [--app-keychain-service <name>]` | Checks completeness, configured blockers, allowed head changes and required CI checks, then posts the success status as the configured App. Dry-run prints the decision. |
-| `elenchus handoff <pr>` | Prints the release block for a release-shaped pull request, pinned to the reviewed head, and runs none of it. `--subject` overrides the subject taken from the changelog. |
+| `elenchus handoff <pr>` | Prints a release block with the reviewed head, squash subject and body. The block reads the PR's merge commit after merging, fetches the base, and tags and pushes that commit before updating the local base branch. `--subject` overrides the changelog subject. |
 
 `<pr>` is `owner/repo#n` or a pull-request URL. `check` exits 0 with no `FAIL`, 1 with one, and
 2 when it cannot run. `authorize` exits 1 for each refusal and 2 for an execution error.
@@ -198,6 +196,22 @@ version file, changelog heading, tag and merge templates, and the commands that 
 green). Each is required only by the command that uses it.
 [`examples/kickoff.elenchus.json`](examples/kickoff.elenchus.json) is one adopter's complete
 file.
+
+Handoff refuses `handoff.merge_command` without `{merge_body}`. Include the placeholder where the merge CLI accepts its
+squash body, for example `--body {merge_body}`. The renderer shell-quotes it as one
+argument, just as it quotes `{merge_message}` for the subject. Each line names the configured
+pass, role and seat, followed by the standing record's runtime, model and effort. A re-read
+uses the latest record and includes the number of valid records for that pass. A missing
+observation carries the request and its source. The trailers use the first configured author
+of each vendor with a PR commit or a standing record, in vendor order. Vendors with an
+empty authors list contribute no trailer.
+
+Elenchus folds runs of control characters in the block's input values to one space and refuses handoff templates or green commands that contain them.
+Run the block in the target checkout using sh, Bash or zsh. The block requires one control-free URL for both fetching from and pushing to origin and refuses otherwise.
+Handoff checks the repository for the tag when it prints the block. At paste time the block checks the local tag and reads origin immediately before merging.
+After the merge it reads the PR's merge commit, stops if that commit is absent, fetches the base, then tags the merge commit and pushes the tag before switching to the base, fast-forwarding and running the green commands.
+That order lets a dirty file or a base branch held by another worktree stop the checkout update after the tag has reached origin.
+If a tag lands between the last read and the merge, the merge has run and either the fetched tag stops local tag creation or the non-forcing push refuses to overwrite it, leaving the operator to resolve the release and tag by hand.
 
 Optional `finding_flow` names `opens`, ordered `carries`, and the later `ruling` pass.
 `escalate_to` supplies the escalation addressee. `gate` declares the status `context`,
@@ -309,15 +323,25 @@ pull request's install scripts as you.
 
 ## Install
 
-Node 24 or later, and `gh` signed in to an account that can read the repository.
+Use Node 24 or later and npm. For `status` and `check`, sign in to `gh` with an account
+that can read the target repository. To pin the tool in an adopter project, substitute the
+full 40-character commit SHA from the elenchus revision you reviewed. The first usable pin is
+`30c352a`, which added `prepare`. Installing an earlier commit can exit 0 without installing a CLI.
 
 ```bash
-git clone https://github.com/BeniCheni/elenchus.git && cd elenchus && npm ci && npm run build
+npm install 'github:BeniCheni/elenchus#<40-character-commit-sha>'
+npx --no-install elenchus status owner/repo#123
+npx --no-install elenchus check owner/repo#123
 ```
 
-```bash
-node dist/cli.js status owner/repo#123
-```
+Commit the resulting package manifest and lockfile. CI installs the same revision with
+`npm ci`. For a Git dependency, npm installs the build dependencies and runs `prepare`
+to compile `dist/` before packing. Source installs require that preparation step.
+With lifecycle scripts disabled, the Git install also exits 0 without a CLI. The first sign is
+`command not found` from `npx --no-install`. In that environment, install a prebuilt tarball.
+For the GitHub pin, npm fetches the lockfile's `git+ssh` dependency over HTTPS from codeload.
+It checks neither that transport URL nor the lockfile's integrity for the Git dependency. The commit
+SHA is the only verification for this pin.
 
 ## Roadmap
 
@@ -330,13 +354,14 @@ and a merge waits for that proof. In order:
 2. **Prepare the seats** — `prep`, `handoff` and the coverage rule. Done.
 3. **The gate and schema v1.2.** Done on the replay. App-backed `authorize`, configurable policy, re-reads and
    repository-defined passes. Live proof on the replay precedes adopter enablement.
-4. **Adoption.** A release adopters can pin, record blocks in each adopter's review
-   instructions, and release blocks that derive the base branch and merge commit from the
-   pull request. Then the gate on adopter default branches, including the bot-workflow path.
+4. **Adoption.** elenchus supports commit-pinned installs and release blocks built from the
+   PR's records, base and merge commit. After Kickoff v0.6.0, its review skill adds the seat-record
+   block and calls the pinned tool. The gate on adopter default branches
+   follows, including the bot-workflow path.
 5. **Seats that start themselves.** `elenchus run` launches a confirmed route and checks its
    observation before the seat pushes. Claude Code first, then Codex.
 
-Deferred: a graphical viewer, and seats from vendors beyond these three.
+A graphical viewer and support for additional seat vendors are deferred.
 
 ## Development
 

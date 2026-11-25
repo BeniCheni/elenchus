@@ -1,10 +1,11 @@
 import type { GhClient } from "./gh.js";
+import { vendorForRuntime } from "./config.js";
 import { loadReview } from "./load.js";
 import { buildCheck } from "./report.js";
 import { formatCheck } from "./format.js";
 import { shellQuote } from "./quote.js";
 import { sameSha } from "./sha.js";
-import type { Config, GhContent, HandoffConfig } from "./types.js";
+import type { Config, GhContent, HandoffConfig, Observed, ReviewState } from "./types.js";
 
 export async function buildHandoff(
   gh: GhClient,
@@ -16,8 +17,22 @@ export async function buildHandoff(
   const state = await loadReview(gh, repo, pr, config);
   const handoff = state.config.handoff;
   if (!handoff) throw new Error("config has no handoff");
-  const missing = state.passes.find((pass) => pass.outcome.kind !== "recorded");
-  if (missing) throw new Error(`no valid record for pass ${missing.id}`);
+  if (!handoff.merge_command.includes("{merge_body}")) {
+    throw new Error("config.handoff.merge_command must include {merge_body}");
+  }
+  for (const field of ["section_heading", "merge_command", "merge_message", "tag", "tag_message"] as const) {
+    checkTemplate(field, handoff[field]);
+  }
+  handoff.green.forEach((command, i) => checkTemplate(`green[${i}]`, command));
+  const standingVendors = new Set<string>();
+  const lines = state.passes.map(({ id, role, seat, outcome }) => {
+    if (outcome.kind !== "recorded") throw new Error(`no valid record for pass ${id}`);
+    const { runtime, model, effort } = outcome.record;
+    const holder = vendorForRuntime(state.config, runtime);
+    if (holder) standingVendors.add(holder.name);
+    const count = outcome.history.length > 1 ? ` (${outcome.postings.length} records)` : "";
+    return oneLine(`Pass ${id} — ${role}, seat ${seat} — ${runtime}, model ${routeValue(model)}, effort ${routeValue(effort)}${count}`);
+  });
   const items = buildCheck(state);
   const failures = items.filter((item) => item.severity === "fail");
   if (failures.length > 0) {
@@ -38,7 +53,40 @@ export async function buildHandoff(
     ? subjectOverride.trim()
     : changelogSubject(await readContents(gh, repo, handoff.changelog, state.head), heading);
   if (!subject) throw new Error(`changelog has no section for ${headVersion}`);
-  return renderBlock(handoff, pr, headVersion, subject, repo, state.head);
+  const trailers = await coAuthors(state, standingVendors);
+  if (trailers.length) lines.push("", ...trailers);
+  return renderBlock(gh, handoff, state, headVersion, subject, lines.join("\n"));
+}
+
+const controls = /[\x00-\x1f\x7f-\x9f\u2028\u2029]+/g;
+
+function oneLine(text: string): string {
+  return text.replace(controls, " ");
+}
+
+function checkTemplate(field: string, template: string): void {
+  if (oneLine(template) !== template) throw new Error(`config.handoff.${field} contains a control character`);
+}
+
+function routeValue(value: Observed): string {
+  return value.observed ?? `${value.requested ?? "unspecified"} requested (observed: null, source: ${value.source ?? "absent"})`;
+}
+
+async function coAuthors(state: ReviewState, standingVendors: Set<string>): Promise<string[]> {
+  // Build commits can predate the first seat. Include the whole PR, excluding the base history.
+  const range = await state.compare(state.baseSha, state.head, true);
+  if (!range.commits || range.commits.length !== range.total_commits) {
+    throw new Error("handoff cannot identify commit authors from an incomplete PR comparison");
+  }
+  const authors = new Set(range.commits.map(({ commit }) => `${commit?.author?.name} <${commit?.author?.email}>`));
+  const trailers = new Set<string>();
+  for (const [name, vendor] of Object.entries(state.config.vendors)) {
+    const first = vendor.authors[0];
+    if (first && (standingVendors.has(name) || vendor.authors.some((author) => authors.has(author)))) {
+      trailers.add(`Co-authored-by: ${oneLine(first)}`);
+    }
+  }
+  return [...trailers];
 }
 
 const ABBREVIATIONS = new Set(["vs", "e.g", "i.e", "mr", "mrs", "ms", "dr", "st", "jr", "sr", "etc", "fig", "al", "prof"]);
@@ -82,25 +130,55 @@ function abbreviationBefore(before: string): boolean {
   return ABBREVIATIONS.has(word[1].toLowerCase());
 }
 
-export function renderBlock(
+// Keep Git's output terminator in the comparison. Command substitution drops trailing LFs.
+const checkOrigin = "node -e " + shellQuote([
+  'const git = (...args) => require("node:child_process").execFileSync("git", ["remote", "get-url", ...args, "origin"]);',
+  'const fetch = git(), push = git("--push", "--all");',
+  'const url = new TextDecoder("utf-8", { fatal: true }).decode(fetch.subarray(0, -1));',
+  `if (!fetch.equals(push) || fetch.length < 2 || fetch.at(-1) !== 10 || ${controls}.test(url)) process.exit(1);`,
+].join(" "));
+
+async function requireAbsentTag(gh: GhClient, repo: string, tag: string): Promise<void> {
+  try {
+    await gh.get(`/repos/${repo}/git/ref/tags/${tag.split("/").map(encodeURIComponent).join("/")}`);
+  } catch (error) {
+    if (error instanceof Error && error.message === "gh: Not Found (HTTP 404)") return;
+    throw new Error(`handoff cannot establish whether tag ${tag} exists`, { cause: error });
+  }
+  throw new Error(`tag ${tag} already exists`);
+}
+
+async function renderBlock(
+  gh: GhClient,
   handoff: HandoffConfig,
-  pr: number,
+  { pr, repo, head, baseRef }: ReviewState,
   version: string,
   subject: string,
-  repo: string,
-  head: string,
-): string {
+  body: string,
+): Promise<string> {
   const values = { version, subject, repo, head };
-  const tag = fillRaw(handoff.tag, values);
-  const tagMessage = fillRaw(handoff.tag_message, values);
-  const mergeMessage = fillRaw(handoff.merge_message, values);
-  const merge = fillCommand(handoff.merge_command, { ...values, pr: String(pr), merge_message: mergeMessage, tag });
+  const tag = oneLine(fillRaw(handoff.tag, values));
+  const tagMessage = oneLine(fillRaw(handoff.tag_message, values));
+  const mergeMessage = oneLine(fillRaw(handoff.merge_message, values));
+  await requireAbsentTag(gh, repo, tag);
+  const merge = fillCommand(handoff.merge_command, {
+    version: oneLine(version), subject: oneLine(subject), repo: oneLine(repo), head: oneLine(head),
+    pr: String(pr), merge_message: mergeMessage, merge_body: body, tag,
+  });
+  const tagRef = shellQuote(`refs/tags/${tag}`);
+  baseRef = oneLine(baseRef);
   const lines = [
+    `! git rev-parse -q --verify ${tagRef}`,
+    checkOrigin,
+    `{ git ls-remote --exit-code origin ${tagRef} >/dev/null; test $? -eq 2; }`,
     merge,
-    "git fetch origin main",
-    "git merge --ff-only origin/main",
-    `git tag -a ${shellQuote(tag)} "$(git rev-parse origin/main)" -m ${shellQuote(tagMessage)}`,
-    `git push origin ${shellQuote(`refs/tags/${tag}`)}`,
+    `merge_commit=$(gh pr view ${shellQuote(String(pr))} --repo ${shellQuote(oneLine(repo))} --json mergeCommit --jq '.mergeCommit.oid // empty')`,
+    'test -n "$merge_commit"',
+    `git fetch origin ${shellQuote(`refs/heads/${baseRef}:refs/remotes/origin/${baseRef}`)}`,
+    `git tag -a ${shellQuote(tag)} "$merge_commit" -m ${shellQuote(tagMessage)}`,
+    `git push origin ${tagRef}`,
+    `git switch -- ${shellQuote(baseRef)}`,
+    `git merge --ff-only ${shellQuote(`refs/remotes/origin/${baseRef}`)}`,
     ...handoff.green,
   ];
   return `${lines.join(" &&\n")}\n`;

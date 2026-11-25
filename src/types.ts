@@ -83,7 +83,7 @@ export type HandoffConfig = {
   tag_message: string;
   /** Squash subject, with `{subject}` filled. */
   merge_message: string;
-  /** Shell command, with `{pr}` and `{merge_message}` filled. */
+  /** Shell command with a required `{merge_body}` and optional substitutions including `{pr}` and `{merge_message}`. */
   merge_command: string;
   green: string[];
 };
